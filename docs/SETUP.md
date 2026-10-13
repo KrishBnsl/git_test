@@ -38,7 +38,37 @@ Easiest: let GitHub build it.
 2. Every push runs the **Android** workflow. Open the run → **Artifacts → gng-debug-apk**, download it, and send the APK to the group.
 3. On each phone, allow "Install unknown apps" for whatever app opens the APK (Files, WhatsApp, Chrome).
 
-## 4. First run
+## 4. Signed release APKs
+
+Debug APKs are fine for testing. For proper releases (installable as updates over each other) you sign with your own key.
+
+**One-time: make the signing key.** In a terminal with Java (Android Studio's *Terminal* tab works):
+
+```bash
+keytool -genkeypair -v -keystore gng-release.jks -alias gng -keyalg RSA -keysize 2048 -validity 10000
+base64 -w0 gng-release.jks > gng-release.jks.b64   # macOS: base64 -i gng-release.jks -o gng-release.jks.b64
+```
+
+⚠️ **Back up `gng-release.jks` and its password somewhere safe (not in the repo).** If you lose it, phones can't update to new versions; everyone has to uninstall and reinstall.
+
+Add four more repository secrets:
+
+| Secret | Value |
+|---|---|
+| `RELEASE_KEYSTORE_BASE64` | the contents of `gng-release.jks.b64` |
+| `RELEASE_KEYSTORE_PASSWORD` | the keystore password you chose |
+| `RELEASE_KEY_ALIAS` | `gng` |
+| `RELEASE_KEY_PASSWORD` | the key password (same as the keystore password unless you set a different one) |
+
+**Each release:** push a version tag, or use **Actions → Release → Run workflow** and type a version.
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+The **Release** workflow builds a signed `gng-0.2.0.apk` and attaches it to a new page under the repo's **Releases**. Share that link with the gang. Installing a newer release updates the app in place, keeping everyone logged in.
+
+## 5. First run
 
 1. Sign up, pick your emoji and name, and add your birthday.
 2. **➕ New gang**, then share the 6-letter code (the share icon in the gang's top bar).
