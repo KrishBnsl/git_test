@@ -48,12 +48,12 @@ import com.gng.app.ui.components.Avatar
 import com.gng.app.ui.components.Choice
 import com.gng.app.ui.components.EmptyState
 import com.gng.app.ui.components.GngIcon
+import com.gng.app.ui.components.GroupAvatar
 import com.gng.app.ui.components.GngSheet
 import com.gng.app.ui.components.IconPicker
 import com.gng.app.ui.components.InfoChip
 import com.gng.app.ui.components.Loading
 import com.gng.app.ui.components.SegmentedChoice
-import com.gng.app.ui.components.TonalIcon
 import com.gng.app.ui.friendly
 import com.gng.app.ui.gngViewModel
 import com.gng.app.ui.icons.GngIcons
@@ -216,10 +216,7 @@ private fun GangCard(g: Group, onClick: () -> Unit) {
         modifier = Modifier.fillMaxWidth(),
     ) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            TonalIcon(
-                GroupIcons.resolve(g.icon).icon, size = 56.dp,
-                container = scheme.primaryContainer, content = scheme.onPrimaryContainer,
-            )
+            GroupAvatar(g.icon, g.photoUrl, size = 56.dp)
             Column(Modifier.padding(horizontal = 16.dp).weight(1f)) {
                 Text(g.name, style = MaterialTheme.typography.titleMedium, maxLines = 1)
                 Spacer(Modifier.height(6.dp))

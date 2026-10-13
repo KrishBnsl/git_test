@@ -39,13 +39,20 @@ object SampleData {
 
     val people = listOf(me, aarav, bhavya, chirag, diya, esha)
 
-    val group = Group("g1", "Hostel H4 Maggi Club", "restaurant", "K7P2QX", me.id, listOf(CountRow(people.size)))
+    val group = Group("g1", "Hostel H4 Maggi Club", "restaurant", "K7P2QX", me.id, memberRows = listOf(CountRow(people.size)))
     val groups = listOf(
         group,
-        Group("g2", "CSE B3", "school", "A9D4LM", me.id, listOf(CountRow(34))),
-        Group("g3", "Cricket Sundays", "sports_cricket", "Z3W8TN", aarav.id, listOf(CountRow(11))),
+        Group("g2", "CSE B3", "school", "A9D4LM", me.id, memberRows = listOf(CountRow(34))),
+        Group("g3", "Cricket Sundays", "sports_cricket", "Z3W8TN", aarav.id, memberRows = listOf(CountRow(11))),
     )
-    val ctx = GroupContext(group, me, people.associateBy { it.id })
+    private val roles = people.associate { it.id to if (it.id == me.id || it.id == aarav.id) "admin" else "member" }
+    val ctx = GroupContext(group, me, people.associateBy { it.id }, roles)
+
+    /** The same gang seen by a regular member, after an admin locked editing and messaging. */
+    val memberCtx = GroupContext(
+        group.copy(editPermission = "admins", messagePermission = "admins"),
+        bhavya, people.associateBy { it.id }, roles,
+    )
 
     val messages = listOf(
         Message(1, "g1", null, "Hostel H4 Maggi Club is live. Share the code K7P2QX to bring in the gang.", "system", null, ago(60 * 26)),
@@ -103,17 +110,26 @@ object SampleData {
         MaterialVote("m2", me.id, "g1"), MaterialVote("m3", bhavya.id, "g1"),
     )
 
-    private fun presence(user: Profile, zone: String?, icon: String?, minutesAgo: Long, live: Boolean = false) = Presence(
-        user.id, if (live) "live" else "zone", zone, icon,
-        if (live) 28.7502 else null, if (live) 77.1172 else null,
-        if (live) now.plus(40, ChronoUnit.MINUTES).toString() else null, ago(minutesAgo),
+    // Spots around DTU Rohini
+    private val library = 28.7511 to 77.1180
+    private val micMac = 28.7502 to 77.1172
+    private val hostel = 28.7487 to 77.1160
+    private val campus = 28.7499 to 77.1170
+
+    private fun spot(user: Profile, name: String, icon: String, at: Pair<Double, Double>, minutesAgo: Long) =
+        Presence(user.id, "zone", name, icon, at.first, at.second, null, null, null, ago(minutesAgo))
+
+    private fun live(user: Profile, near: String, at: Pair<Double, Double>, minutesAgo: Long) = Presence(
+        user.id, "live", near, "local_library", library.first, library.second, at.first, at.second,
+        now.plus(40, ChronoUnit.MINUTES).toString(), ago(minutesAgo),
     )
 
     val presence = listOf(
-        presence(aarav, "Mic Mac", "restaurant", 6),
-        presence(bhavya, "Central Library", "local_library", 12, live = true),
-        presence(chirag, "H4 Hostel", "apartment", 190),
-        presence(diya, "DTU campus", "school", 2),
+        spot(aarav, "Mic Mac", "restaurant", micMac, 6),
+        spot(me, "Mic Mac", "restaurant", micMac, 3), // same spot as Aarav, so the two avatars fan out
+        live(bhavya, "Central Library", 28.7513 to 77.1183, 12),
+        spot(chirag, "H4 Hostel", "apartment", hostel, 190), // stale: drawn faded
+        spot(diya, "DTU campus", "school", campus, 2),
     ).associateBy { it.userId }
 
     private fun slot(user: Profile, start: LocalTime, end: LocalTime, subject: String, room: String? = null) =

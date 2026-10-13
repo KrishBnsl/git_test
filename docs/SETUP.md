@@ -9,6 +9,8 @@ About 15 minutes, all free.
    Then do the same for `supabase/migrations/0002_design_refresh.sql` (profile photos, icon keys, plain-text chat events).
    Run each file **once**. Running one again fails with `relation ... already exists`, which is harmless.
    Already ran `0001` earlier? Just run `0002`.
+   Then run `supabase/migrations/0003_group_settings_and_map.sql` (group photos and permissions, admin roles, map data).
+   All three can be run again safely if you're unsure whether you did.
 3. **Authentication → Providers → Email**: keep it enabled.
    For a friends-only app it's easiest to turn **Confirm email** *off*. Otherwise everyone has to click a link in their inbox before logging in.
 4. **Project Settings → API**: copy the **Project URL** and the **anon public** key.
@@ -45,7 +47,8 @@ adb shell am start -n com.gng.app/.debug.GalleryActivity --es screen chat --ez d
 
 `--es screen` takes `auth-signup`, `auth-login`, `profile-new`, `profile-edit`, `groups`, `groups-empty`, `chat`, `plans`,
 `squad`, `study`, `timetable`, `settings`, or a sheet: `sheet-plan`, `sheet-lunch`, `sheet-gang`, `sheet-join`, `sheet-pin`,
-`sheet-exam`, `sheet-material`, `sheet-class`. `--ez dark` switches to dark theme and `--ez dynamic` to wallpaper colours.
+`sheet-exam`, `sheet-material`, `sheet-class`, `sheet-group-edit`. Also `map`, `map-selected`, `map-empty`,
+`group-settings`, `group-settings-member` (the read-only view a regular member gets) and `chat-locked`. `--ez dark` switches to dark theme and `--ez dynamic` to wallpaper colours.
 The gallery only exists in debug builds; release builds don't contain it.
 
 ## 3. Get it onto your friends' phones
@@ -95,6 +98,8 @@ The **Release** workflow builds a signed `gng-0.2.0.apk` and attaches it to a ne
 5. For automatic check-ins while the app is closed, set the app's location permission to **Allow all the time**.
 
 ## Notes
+
+- **Map tiles** come from OpenStreetMap's public servers, which need no key. They are run by volunteers with a fair-use policy, which is fine for a friend group. If gng grows, switch the tile source in `ui/map/OsmMap.kt` to a keyed provider (MapTiler, Stadia, or your own).
 
 - The anon key is designed to ship inside apps; row-level security is what protects the data. Never put the **service_role** key in the app.
 - Free-tier Supabase projects pause after a week with no activity. Open the dashboard and hit **Restore** if that happens.

@@ -11,6 +11,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.gng.app.data.Profile
 import com.gng.app.ui.group.GroupHomeScreen
+import com.gng.app.ui.group.GroupSettingsScreen
 import com.gng.app.ui.groups.GroupsScreen
 import com.gng.app.ui.profile.ProfileScreen
 import com.gng.app.ui.settings.SettingsScreen
@@ -43,6 +44,16 @@ fun MainNav(me: Profile, onProfileSaved: (Profile) -> Unit) {
                 me = me,
                 onBack = { nav.popBackStack() },
                 onTimetable = { nav.navigate("timetable") },
+                onSettings = { nav.navigate("group/${entry.arguments?.getString("groupId")}/settings") },
+            )
+        }
+        composable("group/{groupId}/settings") { entry ->
+            GroupSettingsScreen(
+                groupId = entry.arguments?.getString("groupId")!!,
+                me = me,
+                onBack = { nav.popBackStack() },
+                // Leaving removes the gang from your list, so go all the way back to it.
+                onLeft = { nav.popBackStack("groups", inclusive = false) },
             )
         }
         composable("timetable") { TimetableScreen(me = me, onBack = { nav.popBackStack() }) }

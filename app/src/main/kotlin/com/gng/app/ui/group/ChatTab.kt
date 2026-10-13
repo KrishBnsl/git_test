@@ -214,7 +214,11 @@ fun ChatContent(
                 }
             }
         }
-        MessageInput(draft, { draft = it }, onSend = { onSend(draft); draft = "" })
+        if (ctx.canSendMessages) {
+            MessageInput(draft, { draft = it }, onSend = { onSend(draft); draft = "" })
+        } else {
+            ReadOnlyBar()
+        }
     }
 }
 
@@ -369,6 +373,27 @@ private fun EventRow(m: Message, ctx: GroupContext, onOpen: (Message) -> Unit) {
                 Text(m.body, style = MaterialTheme.typography.bodyMedium)
             }
             GngIcon(GngIcons.ChevronRight, null)
+        }
+    }
+}
+
+/** Shown instead of the input when an admin has limited who can message. */
+@Composable
+private fun ReadOnlyBar() {
+    val scheme = MaterialTheme.colorScheme
+    Surface(
+        color = scheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(28.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Row(Modifier.padding(horizontal = 18.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            GngIcon(GngIcons.Lock, null, tint = scheme.onSurfaceVariant, size = 20.dp)
+            Spacer(Modifier.width(12.dp))
+            Text(
+                "Only admins can send messages in this gang",
+                style = MaterialTheme.typography.bodyMedium,
+                color = scheme.onSurfaceVariant,
+            )
         }
     }
 }

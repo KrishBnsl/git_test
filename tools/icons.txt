@@ -66,7 +66,7 @@ near_me
 push_pin+
 sensors
 location_off
-map
+map+
 cake+
 celebration
 wifi_off
@@ -116,6 +116,12 @@ computer
 park
 music_note
 pets
+
+# group settings + map
+admin_panel_settings
+zoom_out_map
+directions
+shield_person
 
 # misc
 night_shelter

@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import com.gng.app.ui.icons.GroupIcons
 import com.gng.app.ui.theme.avatarColors
 import com.gng.app.ui.theme.pickAvatarColor
 
@@ -119,6 +120,31 @@ fun initialsOf(name: String): String =
     name.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.take(2)
         .joinToString("") { it.first().uppercase() }
         .ifEmpty { "?" }
+
+/** A gang's picture: its photo if one is set, otherwise its chosen icon on a tonal shape. */
+@Composable
+fun GroupAvatar(
+    iconKey: String,
+    photoUrl: String?,
+    modifier: Modifier = Modifier,
+    size: Dp = 48.dp,
+    contentDescription: String? = null,
+) {
+    val scheme = MaterialTheme.colorScheme
+    if (photoUrl.isNullOrBlank()) {
+        TonalIcon(
+            GroupIcons.resolve(iconKey).icon, modifier, size = size,
+            container = scheme.primaryContainer, content = scheme.onPrimaryContainer,
+        )
+    } else {
+        Box(modifier.size(size).clip(CircleShape).background(scheme.primaryContainer)) {
+            AsyncImage(
+                model = photoUrl, contentDescription = contentDescription,
+                contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
+            )
+        }
+    }
+}
 
 /** An avatar with a small status dot at the bottom-end corner. */
 @Composable
@@ -278,6 +304,7 @@ fun <T> SegmentedChoice(
     onSelect: (T) -> Unit,
     modifier: Modifier = Modifier,
     @DrawableRes checkIcon: Int,
+    enabled: Boolean = true,
 ) {
     SingleChoiceSegmentedButtonRow(modifier.fillMaxWidth()) {
         choices.forEachIndexed { index, choice ->
@@ -285,6 +312,7 @@ fun <T> SegmentedChoice(
             SegmentedButton(
                 selected = isSelected,
                 onClick = { onSelect(choice.value) },
+                enabled = enabled,
                 shape = SegmentedButtonDefaults.itemShape(index, choices.size),
                 icon = {
                     val icon = if (isSelected) checkIcon else choice.icon

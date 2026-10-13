@@ -17,7 +17,11 @@ import com.gng.app.ui.auth.AuthContent
 import com.gng.app.ui.group.AddExamSheet
 import com.gng.app.ui.group.AddMaterialSheet
 import com.gng.app.ui.group.ChatContent
+import com.gng.app.ui.group.EditGroupSheet
 import com.gng.app.ui.group.GroupScaffold
+import com.gng.app.ui.group.GroupSettingsContent
+import com.gng.app.ui.group.MapContent
+import com.gng.app.ui.group.toMapSource
 import com.gng.app.ui.group.GroupTab
 import com.gng.app.ui.group.LunchSheet
 import com.gng.app.ui.group.NewPlanSheet
@@ -55,8 +59,15 @@ class GalleryActivity : ComponentActivity() {
 private val noop = {}
 
 @Composable
+private fun MapScreen(selected: String?) {
+    val s = SampleData
+    val pins = com.gng.core.MapRules.pins(s.presence.values.map { it.toMapSource() }, SampleData.now)
+    MapContent(s.ctx, pins, selected, true, {}, { null }, {}, { _, _ -> })
+}
+
+@Composable
 private fun Group(tab: GroupTab, content: @Composable () -> Unit) {
-    GroupScaffold(SampleData.ctx, null, tab, {}, {}, {}, {}) { content() }
+    GroupScaffold(SampleData.ctx, null, tab, {}, {}, {}, {}, {}) { content() }
 }
 
 @Composable
@@ -91,6 +102,15 @@ private fun Screen(name: String) {
         }
         "timetable" -> TimetableContent(s.myClasses, null, {}, {}, {}, {}, DayOfWeek.of(java.time.LocalDate.now().dayOfWeek.value))
         "settings" -> SettingsContent(s.me, ThemeMode.System, true, {}, {}, {}, {}, {}, {})
+        "map" -> Group(GroupTab.Map) { MapScreen(selected = null) }
+        "map-selected" -> Group(GroupTab.Map) { MapScreen(selected = "u-bhavya") }
+        "map-empty" -> Group(GroupTab.Map) {
+            MapContent(s.ctx, emptyList(), null, true, {}, { null }, {}, { _, _ -> })
+        }
+        "chat-locked" -> Group(GroupTab.Chat) { ChatContent(s.memberCtx, s.messages, s.reactions, {}, { _, _ -> }, {}) }
+        "group-settings" -> GroupSettingsContent(s.ctx, false, null, {}, {}, {}, {}, { _, _ -> }, {}, {}, { _, _ -> }, {})
+        "group-settings-member" -> GroupSettingsContent(s.memberCtx, false, null, {}, {}, {}, {}, { _, _ -> }, {}, {}, { _, _ -> }, {})
+        "sheet-group-edit" -> EditGroupSheet("Hostel H4 Maggi Club", "restaurant", {}, { _, _ -> })
         "sheet-plan" -> NewPlanSheet(PlanKind.Lunch, "g1", {}, {})
         "sheet-lunch" -> LunchSheet({}, { _, _, _ -> })
         "sheet-gang" -> NewGangSheet(GangSheetMode.Start, false, null, {}, { _, _ -> }, {})

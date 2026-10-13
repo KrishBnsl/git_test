@@ -71,6 +71,7 @@ object GngIcons {
     @DrawableRes val Sensors = R.drawable.ic_sensors
     @DrawableRes val LocationOff = R.drawable.ic_location_off
     @DrawableRes val Map = R.drawable.ic_map
+    @DrawableRes val MapFill = R.drawable.ic_map_fill
     @DrawableRes val Cake = R.drawable.ic_cake
     @DrawableRes val CakeFill = R.drawable.ic_cake_fill
     @DrawableRes val Celebration = R.drawable.ic_celebration
@@ -117,6 +118,10 @@ object GngIcons {
     @DrawableRes val Park = R.drawable.ic_park
     @DrawableRes val MusicNote = R.drawable.ic_music_note
     @DrawableRes val Pets = R.drawable.ic_pets
+    @DrawableRes val AdminPanelSettings = R.drawable.ic_admin_panel_settings
+    @DrawableRes val ZoomOutMap = R.drawable.ic_zoom_out_map
+    @DrawableRes val Directions = R.drawable.ic_directions
+    @DrawableRes val ShieldPerson = R.drawable.ic_shield_person
     @DrawableRes val NightShelter = R.drawable.ic_night_shelter
     @DrawableRes val Bolt = R.drawable.ic_bolt
     @DrawableRes val Star = R.drawable.ic_star

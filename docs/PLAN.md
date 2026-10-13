@@ -104,12 +104,17 @@ The MVP's emoji-driven look was replaced with a proper **Material You (Material 
 - Reworked Chat, Plans, Squad, Study, onboarding and settings, with bottom sheets for create flows
 - Debug-only screen gallery with sample data for design review
 
+## 5c. Map and group settings
+
+- **Map tab.** Everyone in the gang as an avatar on an OpenStreetMap map of campus, Snap Map style. People in **Live** mode appear at their exact position (with a pulsing ring); people in **Spot** mode appear on their pinned spot, never their real position; **Ghost** people don't appear. Check-ins older than 6 hours drop off, and ones older than 45 minutes are drawn faded. Avatars on the same spot fan out so none hides another. Tap an avatar for a details card with "Open in Maps".
+- **Group settings** (tap the gang's name, or menu, Group settings). Anyone allowed to edit can change the gang's **photo**, name and icon. **Admins** choose who can edit the gang (members or admins only) and who can send messages (everyone or admins only), and can make or remove admins. If the last admin leaves, the longest-standing member is promoted.
+- All of this is enforced **in the database** (migration `0003`), not just hidden in the app: members can't change permissions, a locked chat rejects messages from non-admins, and group photos can only be uploaded to the gang's own folder.
+
 ## 6. Roadmap
 
 **Phase 2: make it sticky**
 - Push notifications (Firebase Cloud Messaging + a Supabase Edge Function): new lunch request, someone RSVP'd to your plan, birthday morning, exam tomorrow
 - Daily birthday post in chat (pg_cron)
-- Map view of live friends (osmdroid / Google Maps Compose)
 - Images in chat & lunch board photos
 - Reply threads, mentions (@name), message delete/edit
 - Polls ("Domino's or Mic Mac?")
@@ -128,6 +133,10 @@ The MVP's emoji-driven look was replaced with a proper **Material You (Material 
 - Option B is likely less work given the codebase is Kotlin end to end.
 
 ## 7. Known limitations
+
+- On the map, people whose spots are close together can overlap when you zoom far out. Zoom in and they separate.
+- The seeded "DTU campus" spot has its centre in the middle of campus, so anyone in spot mode who isn't at a more specific pinned spot is drawn there.
+- Map tiles use OpenStreetMap's free public servers (fair use, no key).
 
 - Android limits background checks to about every 15 minutes, and only with "Allow all the time" location permission. Without it, check-ins happen when you open the app or tap **Check in**.
 - Realtime can't filter DELETE events, so un-reacting and un-RSVPing by *other* people show up on the next refresh rather than instantly.

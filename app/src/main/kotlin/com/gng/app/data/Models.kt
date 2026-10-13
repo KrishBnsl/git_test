@@ -34,6 +34,11 @@ data class Group(
     @SerialName("emoji") val icon: String,
     @SerialName("invite_code") val inviteCode: String,
     @SerialName("created_by") val createdBy: String,
+    @SerialName("photo_url") val photoUrl: String? = null,
+    /** Who may change the photo, name and icon. */
+    @SerialName("edit_permission") val editPermission: String = "members",
+    /** Who may send chat messages. */
+    @SerialName("message_permission") val messagePermission: String = "everyone",
     // Present when selected with `group_members(count)`.
     @SerialName("group_members") val memberRows: List<CountRow> = emptyList(),
 ) {
@@ -204,11 +209,24 @@ data class Presence(
     val mode: String,
     @SerialName("zone_name") val zoneName: String? = null,
     @SerialName("zone_emoji") val zoneIcon: String? = null,
+    @SerialName("zone_lat") val zoneLat: Double? = null,
+    @SerialName("zone_lng") val zoneLng: Double? = null,
     val lat: Double? = null,
     val lng: Double? = null,
     @SerialName("live_until") val liveUntil: String? = null,
     @SerialName("updated_at") val updatedAt: String,
 )
+
+object GroupPermission {
+    const val MEMBERS = "members"
+    const val ADMINS = "admins"
+    const val EVERYONE = "everyone"
+}
+
+object GroupRole {
+    const val ADMIN = "admin"
+    const val MEMBER = "member"
+}
 
 enum class ExamKind(val db: String, val label: String) {
     Midterm("midterm", "Midsem"),

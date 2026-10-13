@@ -76,6 +76,10 @@ Screens fade in with a short slide and fade out quickly (`MainNav.kt`); tabs cro
 
 An adaptive icon: the gng mark (a chat bubble with three dots, the dots cut out so the background shows through) on pink, plus a **monochrome layer** so it takes the wallpaper colours on Android 13+ when themed icons are on.
 
+## Map
+
+`ui/map/OsmMap.kt` wraps osmdroid (OpenStreetMap, no API key). Avatars are ordinary Compose components positioned on top of the map from its projection, so they reuse `Avatar`, follow pan and zoom, and animate: a pulsing tertiary ring and a sensors badge for **live** people, a primary ring when selected, and 60% opacity for check-ins older than 45 minutes. Dark mode inverts and hue-rotates the tiles, since OpenStreetMap has no dark style. The pin logic (which position to show, fan-out of overlapping avatars) lives in `core/MapPins.kt` and is unit tested.
+
 ## Reviewing the design
 
 The debug build contains a **gallery** that renders every screen with sample data in light, dark and dynamic colour. See "Run on an emulator" in [SETUP.md](SETUP.md).

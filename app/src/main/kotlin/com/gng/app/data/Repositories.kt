@@ -109,6 +109,49 @@ class GroupRepository(private val client: SupabaseClient) {
             .select(Columns.raw("user_id, role, profiles(*)")) { filter { eq("group_id", groupId) } }
             .decodeList()
 
+    /** Photo, name and icon. Allowed for admins, or for every member when the gang's edit permission is open. */
+    suspend fun updateInfo(
+        groupId: String,
+        name: String? = null,
+        icon: String? = null,
+        photoUrl: String? = null,
+        clearPhoto: Boolean = false,
+    ): Group =
+        client.postgrest.rpc("update_group_info", buildJsonObject {
+            put("p_group", groupId)
+            if (name != null) put("p_name", name)
+            if (icon != null) put("p_icon", icon)
+            if (photoUrl != null) put("p_photo_url", photoUrl)
+            if (clearPhoto) put("p_clear_photo", true)
+        }).decodeAs()
+
+    /** Admins only: who can edit the gang, and who can send messages. */
+    suspend fun updatePermissions(groupId: String, edit: String? = null, message: String? = null): Group =
+        client.postgrest.rpc("update_group_permissions", buildJsonObject {
+            put("p_group", groupId)
+            if (edit != null) put("p_edit", edit)
+            if (message != null) put("p_message", message)
+        }).decodeAs()
+
+    suspend fun setRole(groupId: String, userId: String, role: String) {
+        client.postgrest.rpc("set_member_role", buildJsonObject {
+            put("p_group", groupId)
+            put("p_user", userId)
+            put("p_role", role)
+        })
+    }
+
+    /** Uploads a square JPEG to the group's folder and returns its public URL. */
+    suspend fun uploadPhoto(groupId: String, jpeg: ByteArray): String {
+        val path = "$groupId/${UUID.randomUUID()}.jpg"
+        val bucket = client.storage.from("group-photos")
+        bucket.upload(path, jpeg)
+        return bucket.publicUrl(path)
+    }
+
+    /** Fires when this gang's row changes (photo, name, permissions). */
+    fun changes(groupId: String): Flow<Unit> = rowChanges(client, "groups", "id", groupId)
+
     suspend fun leave(groupId: String, userId: String) {
         client.from("group_members").delete {
             filter {
@@ -319,6 +362,20 @@ private fun anyChange(client: SupabaseClient, table: String, groupId: String, va
     channel.subscribe()
     try {
         emitAll(changes.merge().map { })
+    } finally {
+        withContext(NonCancellable) { client.realtime.removeChannel(channel) }
+    }
+}
+
+private fun rowChanges(client: SupabaseClient, table: String, column: String, value: String): Flow<Unit> = flow {
+    val channel = client.channel("$table-$column-$value-${UUID.randomUUID()}")
+    val changes = channel.postgresChangeFlow<PostgresAction>(schema = "public") {
+        this.table = table
+        filter(column, FilterOperator.EQ, value)
+    }
+    channel.subscribe()
+    try {
+        emitAll(changes.map { })
     } finally {
         withContext(NonCancellable) { client.realtime.removeChannel(channel) }
     }
