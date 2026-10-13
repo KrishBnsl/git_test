@@ -6,6 +6,9 @@ About 15 minutes, all free.
 
 1. Sign up at [supabase.com](https://supabase.com) and create a new project (region: **Mumbai / ap-south-1** is closest to Delhi).
 2. Open **SQL Editor → New query**, paste all of `supabase/migrations/0001_init.sql`, and **Run**.
+   Then do the same for `supabase/migrations/0002_design_refresh.sql` (profile photos, icon keys, plain-text chat events).
+   Run each file **once**. Running one again fails with `relation ... already exists`, which is harmless.
+   Already ran `0001` earlier? Just run `0002`.
 3. **Authentication → Providers → Email**: keep it enabled.
    For a friends-only app it's easiest to turn **Confirm email** *off*. Otherwise everyone has to click a link in their inbox before logging in.
 4. **Project Settings → API**: copy the **Project URL** and the **anon public** key.
@@ -29,6 +32,21 @@ From the terminal instead:
 ./gradlew :core:test          # unit tests for the logic module
 ./gradlew :app:assembleDebug  # APK at app/build/outputs/apk/debug/app-debug.apk
 ```
+
+### Run on an emulator, with a design gallery
+
+If you have the Android SDK and an emulator (or a phone over USB), the debug build includes a **gallery** that shows
+every screen with sample data, so you can review the design without a backend or an account:
+
+```bash
+./gradlew :app:installDebug
+adb shell am start -n com.gng.app/.debug.GalleryActivity --es screen chat --ez dark true --ez dynamic false
+```
+
+`--es screen` takes `auth-signup`, `auth-login`, `profile-new`, `profile-edit`, `groups`, `groups-empty`, `chat`, `plans`,
+`squad`, `study`, `timetable`, `settings`, or a sheet: `sheet-plan`, `sheet-lunch`, `sheet-gang`, `sheet-join`, `sheet-pin`,
+`sheet-exam`, `sheet-material`, `sheet-class`. `--ez dark` switches to dark theme and `--ez dynamic` to wallpaper colours.
+The gallery only exists in debug builds; release builds don't contain it.
 
 ## 3. Get it onto your friends' phones
 

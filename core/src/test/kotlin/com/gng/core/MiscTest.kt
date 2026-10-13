@@ -19,16 +19,20 @@ class MiscTest {
         val today = LocalDate.of(2026, 10, 13)
         val left = Exams.daysLeft(LocalDate.of(2026, 10, 15), today)
         assertEquals(2, left)
-        assertEquals("🔥🔥🔥", Exams.panicMeter(left))
+        assertEquals(Urgency.Critical, Exams.urgency(left))
         assertEquals("in 2 days", Exams.countdownLabel(left))
-        assertEquals("✅", Exams.panicMeter(-1))
+        assertEquals(Urgency.Done, Exams.urgency(-1))
+        assertEquals(Urgency.Today, Exams.urgency(0))
+        assertEquals(Urgency.Soon, Exams.urgency(7))
+        assertEquals(Urgency.Relaxed, Exams.urgency(15))
     }
 
     @Test
     fun presence() {
         val now = Instant.parse("2026-10-13T08:00:00Z")
-        assertEquals("🍟 Mic Mac · 5m ago", Presence.label("Mic Mac", "🍟", now.minusSeconds(300), now))
-        assertEquals("last seen 📚 Library · 2h ago", Presence.label("Library", "📚", now.minusSeconds(7200), now))
+        assertEquals(PresenceStatus("Mic Mac", "5m ago", false), Presence.describe("Mic Mac", now.minusSeconds(300), now))
+        assertEquals(PresenceStatus("Library", "2h ago", true), Presence.describe("Library", now.minusSeconds(7200), now))
+        assertEquals(PresenceStatus(null, "just now", false), Presence.describe(null, now, now))
         assertEquals(false, Presence.isLive(now.minusSeconds(1), now))
     }
 }

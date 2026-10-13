@@ -6,8 +6,8 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class GeoTest {
-    private val campus = CampusZone("campus", "DTU", "🏫", LatLng(28.7500, 77.1170), 900)
-    private val canteen = CampusZone("canteen", "Mic Mac", "🍟", LatLng(28.7502, 77.1172), 40)
+    private val campus = CampusZone("campus", "DTU", "school", LatLng(28.7500, 77.1170), 900)
+    private val canteen = CampusZone("canteen", "Mic Mac", "restaurant", LatLng(28.7502, 77.1172), 40)
 
     @Test
     fun distanceIsRoughlyRight() {

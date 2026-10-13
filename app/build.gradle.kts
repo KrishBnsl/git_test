@@ -68,6 +68,7 @@ dependencies {
     implementation(project(":core"))
 
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.core.splashscreen)
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
@@ -89,6 +90,9 @@ dependencies {
     implementation(libs.supabase.realtime)
     implementation(libs.supabase.storage)
     implementation(libs.ktor.client.okhttp)
+
+    implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

@@ -1,26 +1,32 @@
 package com.gng.app.ui.group
 
 import android.content.Intent
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -28,24 +34,33 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.gng.app.AppContainer
 import com.gng.app.data.Group
+import com.gng.app.data.Message
 import com.gng.app.data.Profile
+import com.gng.app.ui.components.AvatarInfo
 import com.gng.app.ui.components.EmptyState
+import com.gng.app.ui.components.GngIcon
+import com.gng.app.ui.components.LocalSnackbar
 import com.gng.app.ui.components.Loading
+import com.gng.app.ui.components.TonalIcon
 import com.gng.app.ui.friendly
 import com.gng.app.ui.gngViewModel
+import com.gng.app.ui.icons.GngIcons
+import com.gng.app.ui.icons.GroupIcons
 import kotlinx.coroutines.launch
 
 /** Everything the tabs share: the group and who's in it. */
 data class GroupContext(val group: Group, val me: Profile, val members: Map<String, Profile>) {
-    fun nameOf(userId: String?) = members[userId]?.displayName ?: "someone"
-    fun emojiOf(userId: String?) = members[userId]?.emoji ?: "👤"
+    fun nameOf(userId: String?): String = members[userId]?.displayName ?: "Someone"
+    fun person(userId: String?): AvatarInfo =
+        AvatarInfo(userId ?: "?", nameOf(userId), members[userId]?.avatarUrl)
 }
 
 class GroupHomeViewModel(private val c: AppContainer, private val groupId: String) : ViewModel() {
@@ -69,70 +84,142 @@ class GroupHomeViewModel(private val c: AppContainer, private val groupId: Strin
     }
 }
 
-private enum class Tab(val emoji: String, val label: String) {
-    Chat("💬", "Hangout"), Plans("🍛", "Plans"), Squad("📍", "Squad"), Study("📚", "Study")
+enum class GroupTab(val label: String, val icon: Int, val iconSelected: Int) {
+    Chat("Chat", GngIcons.Forum, GngIcons.ForumFill),
+    Plans("Plans", GngIcons.Event, GngIcons.EventFill),
+    Squad("Squad", GngIcons.Groups, GngIcons.GroupsFill),
+    Study("Study", GngIcons.School, GngIcons.SchoolFill),
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GroupHomeScreen(groupId: String, me: Profile, onBack: () -> Unit, onTimetable: () -> Unit) {
     val vm = gngViewModel(key = "group-$groupId") { GroupHomeViewModel(it, groupId) }
     LaunchedEffect(groupId, me) { vm.load(me) }
-    var tab by rememberSaveable { mutableIntStateOf(0) }
+    var tab by rememberSaveable { mutableIntStateOf(GroupTab.Chat.ordinal) }
+    val ctx = vm.ctx
+
+    GroupScaffold(
+        ctx = ctx,
+        error = vm.error,
+        tab = GroupTab.entries[tab],
+        onTab = { tab = it.ordinal },
+        onBack = onBack,
+        onTimetable = onTimetable,
+        onLeave = { vm.leave(onBack) },
+    ) { current ->
+        if (ctx != null) {
+            when (current) {
+                GroupTab.Chat -> ChatTab(ctx, onOpenEvent = { m -> tab = tabForEvent(m).ordinal })
+                GroupTab.Plans -> PlansTab(ctx)
+                GroupTab.Squad -> SquadTab(ctx, onTimetable)
+                GroupTab.Study -> StudyTab(ctx)
+            }
+        }
+    }
+}
+
+private fun tabForEvent(m: Message): GroupTab = when (m.kind) {
+    "plan" -> GroupTab.Plans
+    else -> GroupTab.Study
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun GroupScaffold(
+    ctx: GroupContext?,
+    error: String?,
+    tab: GroupTab,
+    onTab: (GroupTab) -> Unit,
+    onBack: () -> Unit,
+    onTimetable: () -> Unit,
+    onLeave: () -> Unit,
+    content: @Composable (GroupTab) -> Unit,
+) {
+    val snackbar = remember { SnackbarHostState() }
     var menu by remember { mutableStateOf(false) }
     var confirmLeave by remember { mutableStateOf(false) }
     val context = LocalContext.current
-    val ctx = vm.ctx
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
-                title = { Text(ctx?.let { "${it.group.emoji} ${it.group.name}" } ?: "…") },
+                title = {
+                    if (ctx != null) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TonalIcon(
+                                GroupIcons.resolve(ctx.group.icon).icon, size = 40.dp,
+                                container = MaterialTheme.colorScheme.primaryContainer,
+                                content = MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
+                            androidx.compose.foundation.layout.Column(Modifier.padding(start = 12.dp)) {
+                                Text(ctx.group.name, style = MaterialTheme.typography.titleMedium, maxLines = 1)
+                                Text(
+                                    "${ctx.members.size} members",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                    IconButton(onClick = onBack) { GngIcon(GngIcons.ArrowBack, "Back") }
                 },
                 actions = {
                     if (ctx != null) {
                         IconButton(onClick = {
-                            val text = "Join ${ctx.group.emoji} ${ctx.group.name} on gng! Code: ${ctx.group.inviteCode}"
+                            val text = "Join ${ctx.group.name} on gng. Code: ${ctx.group.inviteCode}"
                             context.startActivity(
                                 Intent.createChooser(
                                     Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text),
                                     "Invite the gang",
                                 ),
                             )
-                        }) { Icon(Icons.Filled.Share, "Invite") }
+                        }) { GngIcon(GngIcons.PersonAdd, "Invite") }
                     }
-                    IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, "More") }
-                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                        DropdownMenuItem(text = { Text("🗓️ My classes") }, onClick = { menu = false; onTimetable() })
-                        DropdownMenuItem(text = { Text("👋 Leave gang") }, onClick = { menu = false; confirmLeave = true })
+                    Box {
+                        IconButton(onClick = { menu = true }) { GngIcon(GngIcons.MoreVert, "More") }
+                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("My classes") },
+                                leadingIcon = { GngIcon(GngIcons.CalendarMonth, null) },
+                                onClick = { menu = false; onTimetable() },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Leave gang") },
+                                leadingIcon = { GngIcon(GngIcons.Logout, null) },
+                                onClick = { menu = false; confirmLeave = true },
+                            )
+                        }
                     }
                 },
             )
         },
         bottomBar = {
             NavigationBar {
-                Tab.entries.forEachIndexed { i, t ->
+                GroupTab.entries.forEach { t ->
                     NavigationBarItem(
-                        selected = tab == i,
-                        onClick = { tab = i },
-                        icon = { Text(t.emoji, fontSize = 22.sp) },
+                        selected = tab == t,
+                        onClick = { onTab(t) },
+                        icon = { GngIcon(if (tab == t) t.iconSelected else t.icon, null) },
                         label = { Text(t.label) },
                     )
                 }
             }
         },
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            when {
-                ctx == null && vm.error != null -> EmptyState("📡", "Couldn't load the gang", vm.error!!)
-                ctx == null -> Loading()
-                else -> when (Tab.entries[tab]) {
-                    Tab.Chat -> ChatTab(ctx)
-                    Tab.Plans -> PlansTab(ctx)
-                    Tab.Squad -> SquadTab(ctx, onTimetable)
-                    Tab.Study -> StudyTab(ctx)
+        CompositionLocalProvider(LocalSnackbar provides snackbar) {
+            Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
+                when {
+                    ctx == null && error != null ->
+                        EmptyState(GngIcons.WifiOff, "Couldn't load the gang", error, Modifier.align(Alignment.Center))
+                    ctx == null -> Loading()
+                    else -> AnimatedContent(
+                        targetState = tab,
+                        transitionSpec = { fadeIn(tween(220, delayMillis = 60)) togetherWith fadeOut(tween(120)) },
+                        label = "tab",
+                    ) { current -> content(current) }
                 }
             }
         }
@@ -141,9 +228,10 @@ fun GroupHomeScreen(groupId: String, me: Profile, onBack: () -> Unit, onTimetabl
     if (confirmLeave) {
         AlertDialog(
             onDismissRequest = { confirmLeave = false },
+            icon = { GngIcon(GngIcons.Logout, null) },
             title = { Text("Leave ${ctx?.group?.name ?: "this gang"}?") },
             text = { Text("You can rejoin later with the invite code.") },
-            confirmButton = { TextButton(onClick = { confirmLeave = false; vm.leave(onBack) }) { Text("Leave") } },
+            confirmButton = { TextButton(onClick = { confirmLeave = false; onLeave() }) { Text("Leave") } },
             dismissButton = { TextButton(onClick = { confirmLeave = false }) { Text("Stay") } },
         )
     }

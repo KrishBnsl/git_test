@@ -1,6 +1,14 @@
 <resources>
+    <!-- The window background shows until Compose draws its first frame. -->
     <style name="Theme.Gng" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/splash_bg</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+
+    <style name="Theme.Gng.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/launcher_bg</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.Gng</item>
     </style>
 </resources>

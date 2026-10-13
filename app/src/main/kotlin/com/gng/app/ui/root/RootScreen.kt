@@ -1,8 +1,10 @@
 package com.gng.app.ui.root
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.Button
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -14,10 +16,10 @@ import com.gng.app.AppContainer
 import com.gng.app.data.Profile
 import com.gng.app.data.Supabase
 import com.gng.app.ui.auth.AuthScreen
-import com.gng.app.ui.components.BouncyButton
 import com.gng.app.ui.components.EmptyState
 import com.gng.app.ui.components.Loading
 import com.gng.app.ui.gngViewModel
+import com.gng.app.ui.icons.GngIcons
 import com.gng.app.ui.profile.ProfileScreen
 import io.github.jan.supabase.auth.status.SessionStatus
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -78,27 +80,29 @@ class RootViewModel(private val c: AppContainer) : ViewModel() {
 
 @Composable
 fun RootScreen() {
-    if (!Supabase.isConfigured) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            EmptyState(
-                "🔧", "Supabase isn't set up yet",
-                "Add SUPABASE_URL and SUPABASE_ANON_KEY to local.properties and rebuild. See docs/SETUP.md.",
-            )
-        }
-        return
-    }
-    val vm = gngViewModel { RootViewModel(it) }
-    val state by vm.state.collectAsStateWithLifecycle()
-    when (val s = state) {
-        RootState.Loading -> Loading()
-        RootState.SignedOut -> AuthScreen()
-        RootState.Offline -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                EmptyState("📡", "Can't reach the gang", "Check your internet and try again.")
-                BouncyButton("Retry", vm::retry)
+    Surface(Modifier.fillMaxSize()) {
+        if (!Supabase.isConfigured) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                EmptyState(
+                    GngIcons.Key, "Supabase isn't set up yet",
+                    "Add SUPABASE_URL and SUPABASE_ANON_KEY to local.properties and rebuild. See docs/SETUP.md.",
+                )
             }
+            return@Surface
         }
-        is RootState.NeedsProfile -> ProfileScreen(userId = s.userId, existing = null, onSaved = vm::profileSaved)
-        is RootState.Ready -> MainNav(me = s.me, onProfileSaved = vm::profileSaved)
+        val vm = gngViewModel { RootViewModel(it) }
+        val state by vm.state.collectAsStateWithLifecycle()
+        when (val s = state) {
+            RootState.Loading -> Loading()
+            RootState.SignedOut -> AuthScreen()
+            RootState.Offline -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                EmptyState(
+                    GngIcons.WifiOff, "Can't reach the gang", "Check your internet and try again.",
+                    action = { Button(onClick = vm::retry) { Text("Retry") } },
+                )
+            }
+            is RootState.NeedsProfile -> ProfileScreen(userId = s.userId, existing = null, onSaved = vm::profileSaved)
+            is RootState.Ready -> MainNav(me = s.me, onProfileSaved = vm::profileSaved)
+        }
     }
 }

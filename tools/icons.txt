@@ -1,0 +1,123 @@
+# Material Symbols (Rounded, weight 400, 24px) used by the app.
+# One name per line. Suffix with "+" to also generate a filled variant (ic_<name>_fill).
+# Regenerate with:  python3 tools/fetch_icons.py
+
+# navigation + tabs
+forum+
+event+
+groups+
+school+
+arrow_back
+arrow_forward
+chevron_right
+expand_more
+more_vert
+close
+check
+add
+refresh
+open_in_new
+
+# actions
+send
+share
+edit
+delete
+search
+logout
+settings+
+content_copy
+person_add
+key
+reply
+add_reaction
+check_circle+
+cancel
+help
+info
+
+# account + form fields
+mail
+lock
+person+
+visibility
+visibility_off
+badge
+alternate_email
+photo_camera
+add_a_photo
+image
+calendar_month
+schedule
+today
+timer
+
+# appearance
+palette
+dark_mode
+light_mode
+brightness_auto
+format_color_fill
+
+# squad + location
+location_on+
+my_location
+near_me
+push_pin+
+sensors
+location_off
+map
+cake+
+celebration
+wifi_off
+sync
+
+# plans
+restaurant
+lunch_dining
+ramen_dining
+local_pizza
+fastfood
+bakery_dining
+set_meal
+coffee
+icecream
+directions_car
+more_horiz
+auto_awesome
+done_all
+
+# study
+menu_book
+description
+picture_as_pdf
+link
+attach_file
+upload_file
+thumb_up+
+local_fire_department+
+sentiment_satisfied
+hourglass_top
+event_busy
+assignment
+
+# group + spot icons
+local_library
+home
+apartment
+sports_basketball
+sports_cricket
+sports_esports
+nightlife
+rocket_launch
+theater_comedy
+science
+computer
+park
+music_note
+pets
+
+# misc
+night_shelter
+bolt
+star+
