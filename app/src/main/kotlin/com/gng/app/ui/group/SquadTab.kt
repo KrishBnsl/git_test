@@ -23,6 +23,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -30,7 +31,9 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -73,7 +76,6 @@ import com.gng.core.LatLng
 import com.gng.core.Timetable
 import com.gng.core.UpcomingBirthday
 import com.gng.core.hhmm
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -87,11 +89,11 @@ import com.gng.core.Presence as PresenceLogic
 private val BIRTHDAY_DATE = DateTimeFormatter.ofPattern("d MMM")
 
 class SquadViewModel(private val c: AppContainer, private val ctx: GroupContext) : ViewModel() {
-    var presence by mutableStateOf<Map<String, Presence>>(emptyMap())
-        private set
     var classes by mutableStateOf<Map<String, List<ClassSlot>>>(emptyMap())
         private set
-    var myLatLng by mutableStateOf<LatLng?>(null)
+
+    /** Bumped after anything that changes where the person appears, so the shared presence reloads. */
+    var changeTick by mutableIntStateOf(0)
         private set
     var message by mutableStateOf<String?>(null)
         private set
@@ -111,23 +113,10 @@ class SquadViewModel(private val c: AppContainer, private val ctx: GroupContext)
                 classes = c.timetable.forUsers(ctx.members.keys.toList()).groupBy({ it.userId }, { it.toCore() })
             }.onFailure { error = it.friendly() }
         }
-        // Presence is a poll, not a stream: positions only change every few minutes anyway.
-        viewModelScope.launch {
-            while (true) {
-                refreshPresence()
-                delay(60_000)
-            }
-        }
     }
 
     fun dismissMessage() { message = null }
     fun dismissError() { error = null }
-
-    private suspend fun refreshPresence() {
-        runCatching { presence = c.locations.presence(ctx.group.id).associateBy { it.userId } }
-            .onFailure { error = it.friendly() }
-        if (sharing.value.effective() == SharingMode.Live) myLatLng = runCatching { c.checkIn.currentLatLng() }.getOrNull()
-    }
 
     fun checkInNow() = viewModelScope.launch {
         message = when (val r = runCatching { c.checkIn.run() }.getOrElse { error = it.friendly(); return@launch }) {
@@ -136,12 +125,12 @@ class SquadViewModel(private val c: AppContainer, private val ctx: GroupContext)
             CheckIn.Result.NoPermission -> "Location permission needed"
             CheckIn.Result.NoFix -> "Couldn't get a GPS fix, try again outside"
         }
-        refreshPresence()
+        changeTick++
     }
 
     fun setMode(mode: SharingMode, liveFor: Duration? = null) = viewModelScope.launch {
         runCatching { c.checkIn.setMode(mode, liveFor) }.onFailure { error = it.friendly() }
-        refreshPresence()
+        changeTick++
     }
 
     fun denyPermission() { message = "Without location permission there are no check-ins" }
@@ -155,14 +144,18 @@ class SquadViewModel(private val c: AppContainer, private val ctx: GroupContext)
 }
 
 @Composable
-fun SquadTab(ctx: GroupContext, onTimetable: () -> Unit) {
+fun SquadTab(ctx: GroupContext, onTimetable: () -> Unit, onMessage: (String) -> Unit) {
     val vm = gngViewModel(key = "squad-${ctx.group.id}") { SquadViewModel(it, ctx) }
     val sharing by vm.sharing.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var pinSheet by remember { mutableStateOf(false) }
     var pendingMode by remember { mutableStateOf<Pair<SharingMode, Duration?>?>(null) }
+    val pv = gngViewModel(key = "presence-${ctx.group.id}") { PresenceViewModel(it, ctx.group.id) }
+    PresencePolling(pv)
+    LaunchedEffect(vm.changeTick) { if (vm.changeTick > 0) pv.refresh() }
     MessageEffect(vm.error, vm::dismissError)
     MessageEffect(vm.message, vm::dismissMessage)
+    MessageEffect(pv.error, pv::dismissError)
 
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
         val ok = granted.values.any { it }
@@ -180,7 +173,7 @@ fun SquadTab(ctx: GroupContext, onTimetable: () -> Unit) {
     }
 
     SquadContent(
-        ctx = ctx, presence = vm.presence, classes = vm.classes, sharing = sharing, myLatLng = vm.myLatLng,
+        ctx = ctx, presence = pv.presence, classes = vm.classes, sharing = sharing, myLatLng = pv.myLatLng,
         birthdays = vm.birthdays,
         onMode = ::choose, onCheckIn = vm::checkInNow, onPin = { pinSheet = true },
         onLocationSettings = {
@@ -188,6 +181,7 @@ fun SquadTab(ctx: GroupContext, onTimetable: () -> Unit) {
                 Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)),
             )
         },
+        onMessage = onMessage,
         onFind = { p, who ->
             val uri = Uri.parse("geo:${p.lat},${p.lng}?q=${p.lat},${p.lng}(${Uri.encode(who)})")
             context.startActivity(Intent(Intent.ACTION_VIEW, uri))
@@ -213,6 +207,7 @@ fun SquadContent(
     onPin: () -> Unit,
     onLocationSettings: () -> Unit,
     onFind: (Presence, String) -> Unit,
+    onMessage: (String) -> Unit = {},
     now: Instant = Instant.now(),
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -294,7 +289,7 @@ fun SquadContent(
                     isMe = p.id == ctx.me.id,
                     presence = presence[p.id],
                     classStatus = classes[p.id]?.let { Timetable.status(it, nowIst) },
-                    myLatLng = myLatLng, now = now, onFind = onFind,
+                    myLatLng = myLatLng, now = now, onFind = onFind, onMessage = { onMessage(p.id) },
                 )
             }
             item {
@@ -340,6 +335,7 @@ private fun MemberRow(
     name: String, photoUrl: String?, id: String, status: String?, isMe: Boolean,
     presence: Presence?, classStatus: ClassStatus?, myLatLng: LatLng?, now: Instant,
     onFind: (Presence, String) -> Unit,
+    onMessage: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
     val info = presence?.let { PresenceLogic.describe(it.zoneName, parseInstant(it.updatedAt), now) }
@@ -370,16 +366,21 @@ private fun MemberRow(
                 null -> Unit
             }
         }
-        if (presence?.lat != null && presence.lng != null && !isMe) {
-            Column(horizontalAlignment = Alignment.End) {
-                FilledTonalIconButton(onClick = { onFind(presence, name) }) { GngIcon(GngIcons.NearMe, "Find $name") }
-                myLatLng?.let {
-                    Text(
-                        Geo.prettyDistance(Geo.distanceMeters(it, LatLng(presence.lat, presence.lng))),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = scheme.onSurfaceVariant,
-                    )
+        Row(verticalAlignment = Alignment.Top) {
+            if (presence?.lat != null && presence.lng != null && !isMe) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    FilledTonalIconButton(onClick = { onFind(presence, name) }) { GngIcon(GngIcons.NearMe, "Find $name") }
+                    myLatLng?.let {
+                        Text(
+                            Geo.prettyDistance(Geo.distanceMeters(it, LatLng(presence.lat, presence.lng))),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = scheme.onSurfaceVariant,
+                        )
+                    }
                 }
+            }
+            if (!isMe) {
+                IconButton(onClick = onMessage) { GngIcon(GngIcons.ChatBubble, "Message $name", tint = scheme.onSurfaceVariant) }
             }
         }
     }

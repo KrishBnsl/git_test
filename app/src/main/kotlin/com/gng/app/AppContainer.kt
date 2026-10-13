@@ -3,6 +3,7 @@ package com.gng.app
 import android.content.Context
 import com.gng.app.data.AuthRepository
 import com.gng.app.data.ChatRepository
+import com.gng.app.data.DmRepository
 import com.gng.app.data.GroupRepository
 import com.gng.app.data.LocationRepository
 import com.gng.app.data.PlansRepository
@@ -12,6 +13,7 @@ import com.gng.app.data.StudyRepository
 import com.gng.app.data.Supabase
 import com.gng.app.data.TimetableRepository
 import com.gng.app.location.CheckIn
+import com.gng.app.update.UpdateManager
 
 /** Hand-rolled dependency container; small enough that a DI framework would be overkill. */
 class AppContainer(context: Context) {
@@ -23,8 +25,10 @@ class AppContainer(context: Context) {
     val groups by lazy { GroupRepository(client) }
     val chat by lazy { ChatRepository(client) }
     val plans by lazy { PlansRepository(client) }
+    val dms by lazy { DmRepository(client) }
     val timetable by lazy { TimetableRepository(client) }
     val locations by lazy { LocationRepository(client) }
     val study by lazy { StudyRepository(client) }
+    val updates by lazy { UpdateManager(context.applicationContext, settings) }
     val checkIn by lazy { CheckIn(context, settings, locations) }
 }

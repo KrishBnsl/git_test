@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -37,6 +39,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.gng.app.container
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -48,16 +53,20 @@ import com.gng.app.ui.components.Avatar
 import com.gng.app.ui.components.Choice
 import com.gng.app.ui.components.EmptyState
 import com.gng.app.ui.components.GngIcon
+import com.gng.app.ui.components.GroupAvatar
 import com.gng.app.ui.components.GngSheet
 import com.gng.app.ui.components.IconPicker
 import com.gng.app.ui.components.InfoChip
 import com.gng.app.ui.components.Loading
 import com.gng.app.ui.components.SegmentedChoice
-import com.gng.app.ui.components.TonalIcon
 import com.gng.app.ui.friendly
 import com.gng.app.ui.gngViewModel
 import com.gng.app.ui.icons.GngIcons
 import com.gng.app.ui.icons.GroupIcons
+import com.gng.app.ui.update.UpdateActions
+import com.gng.app.ui.update.actions
+import com.gng.app.ui.update.UpdateCard
+import com.gng.app.update.UpdateState
 import com.gng.core.InviteCodes
 import kotlinx.coroutines.launch
 
@@ -99,14 +108,17 @@ class GroupsViewModel(private val repo: GroupRepository) : ViewModel() {
 }
 
 @Composable
-fun GroupsScreen(me: Profile, onOpen: (Group) -> Unit, onSettings: () -> Unit) {
+fun GroupsScreen(me: Profile, unreadDms: Int, onOpen: (Group) -> Unit, onSettings: () -> Unit, onMessages: () -> Unit) {
     val vm = gngViewModel { GroupsViewModel(it.groups) }
     LaunchedEffect(Unit) { vm.refresh() }
     var sheet by remember { mutableStateOf<GangSheetMode?>(null) }
 
+    val updates = LocalContext.current.container.updates
+    val updateState by updates.state.collectAsStateWithLifecycle()
     GroupsContent(
-        me = me, groups = vm.groups, refreshing = vm.refreshing, error = vm.error, onDismissError = vm::dismissError,
-        onRefresh = { vm.refresh() }, onOpen = onOpen, onSettings = onSettings,
+        updateState = updateState, updateActions = updates.actions(),
+        me = me, unreadDms = unreadDms, groups = vm.groups, refreshing = vm.refreshing, error = vm.error, onDismissError = vm::dismissError,
+        onRefresh = { vm.refresh() }, onOpen = onOpen, onSettings = onSettings, onMessages = onMessages,
         onStart = { sheet = GangSheetMode.Start }, onJoin = { sheet = GangSheetMode.Join },
     )
 
@@ -126,6 +138,7 @@ enum class GangSheetMode { Start, Join }
 @Composable
 fun GroupsContent(
     me: Profile,
+    unreadDms: Int,
     groups: List<Group>?,
     refreshing: Boolean,
     error: String?,
@@ -133,8 +146,11 @@ fun GroupsContent(
     onRefresh: () -> Unit,
     onOpen: (Group) -> Unit,
     onSettings: () -> Unit,
+    onMessages: () -> Unit,
     onStart: () -> Unit,
     onJoin: () -> Unit,
+    updateState: UpdateState = UpdateState.Idle,
+    updateActions: UpdateActions = UpdateActions(),
 ) {
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val snackbar = remember { SnackbarHostState() }
@@ -153,6 +169,11 @@ fun GroupsContent(
             LargeTopAppBar(
                 title = { Text("Hey, ${me.displayName.substringBefore(' ')}") },
                 actions = {
+                    IconButton(onClick = onMessages) {
+                        BadgedBox(badge = { if (unreadDms > 0) Badge { Text(if (unreadDms > 99) "99+" else unreadDms.toString()) } }) {
+                            GngIcon(GngIcons.ChatBubble, "Messages")
+                        }
+                    }
                     IconButton(onClick = onSettings) { Avatar(me.displayName, me.avatarUrl, size = 36.dp, colorKey = me.id) }
                 },
                 scrollBehavior = scroll,
@@ -168,7 +189,9 @@ fun GroupsContent(
             }
         },
     ) { padding ->
-        PullToRefreshBox(isRefreshing = refreshing, onRefresh = onRefresh, modifier = Modifier.padding(padding)) {
+        Column(Modifier.padding(padding)) {
+        UpdateCard(updateState, updateActions, Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+        PullToRefreshBox(isRefreshing = refreshing, onRefresh = onRefresh, modifier = Modifier.weight(1f)) {
             when {
                 groups == null -> Loading()
                 groups.isEmpty() -> Column(
@@ -203,6 +226,7 @@ fun GroupsContent(
                 }
             }
         }
+        }
     }
 }
 
@@ -216,10 +240,7 @@ private fun GangCard(g: Group, onClick: () -> Unit) {
         modifier = Modifier.fillMaxWidth(),
     ) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            TonalIcon(
-                GroupIcons.resolve(g.icon).icon, size = 56.dp,
-                container = scheme.primaryContainer, content = scheme.onPrimaryContainer,
-            )
+            GroupAvatar(g.icon, g.photoUrl, size = 56.dp)
             Column(Modifier.padding(horizontal = 16.dp).weight(1f)) {
                 Text(g.name, style = MaterialTheme.typography.titleMedium, maxLines = 1)
                 Spacer(Modifier.height(6.dp))

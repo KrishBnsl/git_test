@@ -6,7 +6,9 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -36,28 +38,43 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.viewModelScope
 import com.gng.app.AppContainer
 import com.gng.app.data.Group
+import com.gng.app.data.GroupPermission
+import com.gng.app.data.GroupRole
 import com.gng.app.data.Message
 import com.gng.app.data.Profile
 import com.gng.app.ui.components.AvatarInfo
 import com.gng.app.ui.components.EmptyState
+import com.gng.app.ui.components.GroupAvatar
 import com.gng.app.ui.components.GngIcon
 import com.gng.app.ui.components.LocalSnackbar
 import com.gng.app.ui.components.Loading
-import com.gng.app.ui.components.TonalIcon
 import com.gng.app.ui.friendly
 import com.gng.app.ui.gngViewModel
 import com.gng.app.ui.icons.GngIcons
-import com.gng.app.ui.icons.GroupIcons
 import kotlinx.coroutines.launch
 
 /** Everything the tabs share: the group and who's in it. */
-data class GroupContext(val group: Group, val me: Profile, val members: Map<String, Profile>) {
+data class GroupContext(
+    val group: Group,
+    val me: Profile,
+    val members: Map<String, Profile>,
+    /** user id to "admin" or "member". */
+    val roles: Map<String, String> = emptyMap(),
+) {
+    val isAdmin: Boolean get() = roles[me.id] == GroupRole.ADMIN
+    val canEditGroup: Boolean get() = isAdmin || group.editPermission == GroupPermission.MEMBERS
+    val canSendMessages: Boolean get() = isAdmin || group.messagePermission == GroupPermission.EVERYONE
+    fun isAdmin(userId: String): Boolean = roles[userId] == GroupRole.ADMIN
+
     fun nameOf(userId: String?): String = members[userId]?.displayName ?: "Someone"
     fun person(userId: String?): AvatarInfo =
         AvatarInfo(userId ?: "?", nameOf(userId), members[userId]?.avatarUrl)
@@ -69,11 +86,22 @@ class GroupHomeViewModel(private val c: AppContainer, private val groupId: Strin
     var error by mutableStateOf<String?>(null)
         private set
 
+    private var watching = false
+
+    /** Reloads the gang whenever its row changes (photo, name, permissions), so everyone sees it live. */
+    fun watch(me: Profile) {
+        if (watching) return
+        watching = true
+        viewModelScope.launch {
+            runCatching { c.groups.changes(groupId).collect { load(me).join() } }
+        }
+    }
+
     fun load(me: Profile) = viewModelScope.launch {
         runCatching {
             val group = c.groups.get(groupId)
-            val members = c.groups.members(groupId).associate { it.userId to it.profiles }
-            GroupContext(group, me, members)
+            val rows = c.groups.members(groupId)
+            GroupContext(group, me, rows.associate { it.userId to it.profiles }, rows.associate { it.userId to it.role })
         }.onSuccess { ctx = it; error = null }.onFailure { error = it.friendly() }
     }
 
@@ -87,14 +115,27 @@ class GroupHomeViewModel(private val c: AppContainer, private val groupId: Strin
 enum class GroupTab(val label: String, val icon: Int, val iconSelected: Int) {
     Chat("Chat", GngIcons.Forum, GngIcons.ForumFill),
     Plans("Plans", GngIcons.Event, GngIcons.EventFill),
+    Map("Map", GngIcons.Map, GngIcons.MapFill),
     Squad("Squad", GngIcons.Groups, GngIcons.GroupsFill),
     Study("Study", GngIcons.School, GngIcons.SchoolFill),
 }
 
 @Composable
-fun GroupHomeScreen(groupId: String, me: Profile, onBack: () -> Unit, onTimetable: () -> Unit) {
+fun GroupHomeScreen(
+    groupId: String,
+    me: Profile,
+    onBack: () -> Unit,
+    onTimetable: () -> Unit,
+    onSettings: () -> Unit,
+    onMessage: (userId: String) -> Unit,
+) {
     val vm = gngViewModel(key = "group-$groupId") { GroupHomeViewModel(it, groupId) }
-    LaunchedEffect(groupId, me) { vm.load(me) }
+    LaunchedEffect(groupId, me) {
+        vm.load(me)
+        vm.watch(me)
+    }
+    // Coming back from group settings: pick up whatever changed.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.load(me) }
     var tab by rememberSaveable { mutableIntStateOf(GroupTab.Chat.ordinal) }
     val ctx = vm.ctx
 
@@ -105,13 +146,15 @@ fun GroupHomeScreen(groupId: String, me: Profile, onBack: () -> Unit, onTimetabl
         onTab = { tab = it.ordinal },
         onBack = onBack,
         onTimetable = onTimetable,
+        onSettings = onSettings,
         onLeave = { vm.leave(onBack) },
     ) { current ->
         if (ctx != null) {
             when (current) {
                 GroupTab.Chat -> ChatTab(ctx, onOpenEvent = { m -> tab = tabForEvent(m).ordinal })
                 GroupTab.Plans -> PlansTab(ctx)
-                GroupTab.Squad -> SquadTab(ctx, onTimetable)
+                GroupTab.Map -> MapTab(ctx, onOpenSquad = { tab = GroupTab.Squad.ordinal }, onMessage = onMessage)
+                GroupTab.Squad -> SquadTab(ctx, onTimetable, onMessage)
                 GroupTab.Study -> StudyTab(ctx)
             }
         }
@@ -132,6 +175,7 @@ fun GroupScaffold(
     onTab: (GroupTab) -> Unit,
     onBack: () -> Unit,
     onTimetable: () -> Unit,
+    onSettings: () -> Unit,
     onLeave: () -> Unit,
     content: @Composable (GroupTab) -> Unit,
 ) {
@@ -146,13 +190,12 @@ fun GroupScaffold(
             TopAppBar(
                 title = {
                     if (ctx != null) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            TonalIcon(
-                                GroupIcons.resolve(ctx.group.icon).icon, size = 40.dp,
-                                container = MaterialTheme.colorScheme.primaryContainer,
-                                content = MaterialTheme.colorScheme.onPrimaryContainer,
-                            )
-                            androidx.compose.foundation.layout.Column(Modifier.padding(start = 12.dp)) {
+                        Row(
+                            Modifier.clip(MaterialTheme.shapes.medium).clickable(onClick = onSettings).padding(vertical = 4.dp, horizontal = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            GroupAvatar(ctx.group.icon, ctx.group.photoUrl, size = 40.dp)
+                            Column(Modifier.padding(start = 12.dp)) {
                                 Text(ctx.group.name, style = MaterialTheme.typography.titleMedium, maxLines = 1)
                                 Text(
                                     "${ctx.members.size} members",
@@ -181,6 +224,11 @@ fun GroupScaffold(
                     Box {
                         IconButton(onClick = { menu = true }) { GngIcon(GngIcons.MoreVert, "More") }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Group settings") },
+                                leadingIcon = { GngIcon(GngIcons.Settings, null) },
+                                onClick = { menu = false; onSettings() },
+                            )
                             DropdownMenuItem(
                                 text = { Text("My classes") },
                                 leadingIcon = { GngIcon(GngIcons.CalendarMonth, null) },

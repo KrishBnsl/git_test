@@ -28,7 +28,6 @@ object GngIcons {
     @DrawableRes val Share = R.drawable.ic_share
     @DrawableRes val Edit = R.drawable.ic_edit
     @DrawableRes val Delete = R.drawable.ic_delete
-    @DrawableRes val Search = R.drawable.ic_search
     @DrawableRes val Logout = R.drawable.ic_logout
     @DrawableRes val Settings = R.drawable.ic_settings
     @DrawableRes val SettingsFill = R.drawable.ic_settings_fill
@@ -71,6 +70,7 @@ object GngIcons {
     @DrawableRes val Sensors = R.drawable.ic_sensors
     @DrawableRes val LocationOff = R.drawable.ic_location_off
     @DrawableRes val Map = R.drawable.ic_map
+    @DrawableRes val MapFill = R.drawable.ic_map_fill
     @DrawableRes val Cake = R.drawable.ic_cake
     @DrawableRes val CakeFill = R.drawable.ic_cake_fill
     @DrawableRes val Celebration = R.drawable.ic_celebration
@@ -117,6 +117,19 @@ object GngIcons {
     @DrawableRes val Park = R.drawable.ic_park
     @DrawableRes val MusicNote = R.drawable.ic_music_note
     @DrawableRes val Pets = R.drawable.ic_pets
+    @DrawableRes val ChatBubble = R.drawable.ic_chat_bubble
+    @DrawableRes val ChatBubbleFill = R.drawable.ic_chat_bubble_fill
+    @DrawableRes val AddComment = R.drawable.ic_add_comment
+    @DrawableRes val Search = R.drawable.ic_search
+    @DrawableRes val AdminPanelSettings = R.drawable.ic_admin_panel_settings
+    @DrawableRes val ZoomOutMap = R.drawable.ic_zoom_out_map
+    @DrawableRes val Directions = R.drawable.ic_directions
+    @DrawableRes val ShieldPerson = R.drawable.ic_shield_person
+    @DrawableRes val SystemUpdate = R.drawable.ic_system_update
+    @DrawableRes val SystemUpdateFill = R.drawable.ic_system_update_fill
+    @DrawableRes val Download = R.drawable.ic_download
+    @DrawableRes val Update = R.drawable.ic_update
+    @DrawableRes val NewReleases = R.drawable.ic_new_releases
     @DrawableRes val NightShelter = R.drawable.ic_night_shelter
     @DrawableRes val Bolt = R.drawable.ic_bolt
     @DrawableRes val Star = R.drawable.ic_star

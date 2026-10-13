@@ -15,6 +15,7 @@ supabase = "3.2.6"
 ktor = "3.3.1"
 junit = "5.11.4"
 coil = "3.3.0"
+osmdroid = "6.1.20"
 splashscreen = "1.2.0"
 
 [libraries]
@@ -41,6 +42,7 @@ supabase-postgrest = { module = "io.github.jan-tennert.supabase:postgrest-kt" }
 supabase-realtime = { module = "io.github.jan-tennert.supabase:realtime-kt" }
 supabase-storage = { module = "io.github.jan-tennert.supabase:storage-kt" }
 ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
+osmdroid = { module = "org.osmdroid:osmdroid-android", version.ref = "osmdroid" }
 coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
 coil-network-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coil" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }

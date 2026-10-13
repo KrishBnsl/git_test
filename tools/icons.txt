@@ -23,7 +23,6 @@ send
 share
 edit
 delete
-search
 logout
 settings+
 content_copy
@@ -66,7 +65,7 @@ near_me
 push_pin+
 sensors
 location_off
-map
+map+
 cake+
 celebration
 wifi_off
@@ -116,6 +115,23 @@ computer
 park
 music_note
 pets
+
+# direct messages
+chat_bubble+
+add_comment
+search
+
+# group settings + map
+admin_panel_settings
+zoom_out_map
+directions
+shield_person
+
+# updates
+system_update+
+download
+update
+new_releases
 
 # misc
 night_shelter

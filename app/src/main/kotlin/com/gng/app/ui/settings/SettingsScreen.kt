@@ -20,6 +20,7 @@ import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -42,6 +43,10 @@ import com.gng.app.ui.components.SectionHeader
 import com.gng.app.ui.components.SegmentedChoice
 import com.gng.app.ui.icons.GngIcons
 import com.gng.app.ui.theme.DynamicColorSupported
+import com.gng.app.ui.update.UpdateActions
+import com.gng.app.ui.update.actions
+import com.gng.app.ui.update.UpdateCard
+import com.gng.app.update.UpdateState
 import kotlinx.coroutines.launch
 
 @Composable
@@ -51,7 +56,11 @@ fun SettingsScreen(me: Profile, onEditProfile: () -> Unit, onTimetable: () -> Un
     val dynamic by c.settings.dynamicColor.collectAsStateWithLifecycle(true)
     val scope = rememberCoroutineScope()
 
+    val updates = c.updates
+    val updateState by updates.state.collectAsStateWithLifecycle()
     SettingsContent(
+        updateState = updateState, updateActions = updates.actions(),
+        currentVersion = updates.currentVersion, updatesEnabled = updates.enabled,
         me = me, theme = theme, dynamicColor = dynamic,
         onTheme = { scope.launch { c.settings.setTheme(it) } },
         onDynamicColor = { scope.launch { c.settings.setDynamicColor(it) } },
@@ -78,6 +87,10 @@ fun SettingsContent(
     onTimetable: () -> Unit,
     onBack: () -> Unit,
     onLogout: () -> Unit,
+    updateState: UpdateState = UpdateState.Idle,
+    updateActions: UpdateActions = UpdateActions(),
+    currentVersion: String = BuildConfig.VERSION_NAME,
+    updatesEnabled: Boolean = true,
 ) {
     val scheme = MaterialTheme.colorScheme
     Scaffold(
@@ -153,14 +166,29 @@ fun SettingsContent(
                 leadingContent = { GngIcon(GngIcons.Logout, null, tint = scheme.error) },
                 headlineContent = { Text("Log out", color = scheme.error) },
             )
-            Spacer(Modifier.height(16.dp))
-            Text(
-                "gng ${BuildConfig.VERSION_NAME}",
-                style = MaterialTheme.typography.labelMedium,
-                color = scheme.onSurfaceVariant,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            SectionHeader("About")
+            UpdateCard(updateState, updateActions)
+            val busy = updateState is UpdateState.Checking || updateState is UpdateState.Downloading
+            ListItem(
+                colors = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
+                leadingContent = { GngIcon(GngIcons.Info, null) },
+                headlineContent = { Text("gng $currentVersion") },
+                supportingContent = {
+                    Text(
+                        when {
+                            !updatesEnabled -> "Updates are switched off in test builds"
+                            updateState is UpdateState.Checking -> "Checking for updates…"
+                            updateState is UpdateState.UpToDate -> "You're on the latest version"
+                            updateState is UpdateState.Available -> "Version ${updateState.info.version} is available"
+                            else -> "Updates come from GitHub Releases"
+                        },
+                    )
+                },
+                trailingContent = {
+                    if (updatesEnabled) TextButton(onClick = updateActions.onCheck, enabled = !busy) { Text("Check") }
+                },
             )
+            Spacer(Modifier.height(24.dp))
         }
     }
 }

@@ -27,6 +27,8 @@ private val Context.dataStore by preferencesDataStore("gng_settings")
 class SettingsStore(private val context: Context) {
     private val themeKey = stringPreferencesKey("theme")
     private val dynamicColorKey = booleanPreferencesKey("dynamic_color")
+    private val lastUpdateCheckKey = longPreferencesKey("last_update_check")
+    private val skippedVersionKey = stringPreferencesKey("skipped_update_version")
     private val sharingKey = stringPreferencesKey("sharing")
     private val liveUntilKey = longPreferencesKey("live_until")
 
@@ -48,6 +50,19 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setTheme(mode: ThemeMode) {
         context.dataStore.edit { it[themeKey] = mode.name }
+    }
+
+    suspend fun lastUpdateCheck(): Long = context.dataStore.data.first()[lastUpdateCheckKey] ?: 0L
+
+    suspend fun setLastUpdateCheck(epochMillis: Long) {
+        context.dataStore.edit { it[lastUpdateCheckKey] = epochMillis }
+    }
+
+    /** A version the person chose "Skip" on, so we don't nag about it again. */
+    suspend fun skippedUpdateVersion(): String? = context.dataStore.data.first()[skippedVersionKey]
+
+    suspend fun skipUpdateVersion(version: String) {
+        context.dataStore.edit { it[skippedVersionKey] = version }
     }
 
     suspend fun setDynamicColor(enabled: Boolean) {
