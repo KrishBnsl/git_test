@@ -121,7 +121,14 @@ enum class GroupTab(val label: String, val icon: Int, val iconSelected: Int) {
 }
 
 @Composable
-fun GroupHomeScreen(groupId: String, me: Profile, onBack: () -> Unit, onTimetable: () -> Unit, onSettings: () -> Unit) {
+fun GroupHomeScreen(
+    groupId: String,
+    me: Profile,
+    onBack: () -> Unit,
+    onTimetable: () -> Unit,
+    onSettings: () -> Unit,
+    onMessage: (userId: String) -> Unit,
+) {
     val vm = gngViewModel(key = "group-$groupId") { GroupHomeViewModel(it, groupId) }
     LaunchedEffect(groupId, me) {
         vm.load(me)
@@ -146,8 +153,8 @@ fun GroupHomeScreen(groupId: String, me: Profile, onBack: () -> Unit, onTimetabl
             when (current) {
                 GroupTab.Chat -> ChatTab(ctx, onOpenEvent = { m -> tab = tabForEvent(m).ordinal })
                 GroupTab.Plans -> PlansTab(ctx)
-                GroupTab.Map -> MapTab(ctx, onOpenSquad = { tab = GroupTab.Squad.ordinal })
-                GroupTab.Squad -> SquadTab(ctx, onTimetable)
+                GroupTab.Map -> MapTab(ctx, onOpenSquad = { tab = GroupTab.Squad.ordinal }, onMessage = onMessage)
+                GroupTab.Squad -> SquadTab(ctx, onTimetable, onMessage)
                 GroupTab.Study -> StudyTab(ctx)
             }
         }

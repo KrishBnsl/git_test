@@ -28,7 +28,6 @@ object GngIcons {
     @DrawableRes val Share = R.drawable.ic_share
     @DrawableRes val Edit = R.drawable.ic_edit
     @DrawableRes val Delete = R.drawable.ic_delete
-    @DrawableRes val Search = R.drawable.ic_search
     @DrawableRes val Logout = R.drawable.ic_logout
     @DrawableRes val Settings = R.drawable.ic_settings
     @DrawableRes val SettingsFill = R.drawable.ic_settings_fill
@@ -118,6 +117,10 @@ object GngIcons {
     @DrawableRes val Park = R.drawable.ic_park
     @DrawableRes val MusicNote = R.drawable.ic_music_note
     @DrawableRes val Pets = R.drawable.ic_pets
+    @DrawableRes val ChatBubble = R.drawable.ic_chat_bubble
+    @DrawableRes val ChatBubbleFill = R.drawable.ic_chat_bubble_fill
+    @DrawableRes val AddComment = R.drawable.ic_add_comment
+    @DrawableRes val Search = R.drawable.ic_search
     @DrawableRes val AdminPanelSettings = R.drawable.ic_admin_panel_settings
     @DrawableRes val ZoomOutMap = R.drawable.ic_zoom_out_map
     @DrawableRes val Directions = R.drawable.ic_directions

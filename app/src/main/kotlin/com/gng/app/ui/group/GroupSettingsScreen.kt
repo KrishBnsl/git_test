@@ -144,7 +144,7 @@ class GroupSettingsViewModel(private val c: AppContainer, private val groupId: S
 }
 
 @Composable
-fun GroupSettingsScreen(groupId: String, me: Profile, onBack: () -> Unit, onLeft: () -> Unit) {
+fun GroupSettingsScreen(groupId: String, me: Profile, onBack: () -> Unit, onLeft: () -> Unit, onMessage: (String) -> Unit) {
     val vm = gngViewModel(key = "group-settings-$groupId") { GroupSettingsViewModel(it, groupId, me) }
     val context = LocalContext.current
     GroupSettingsContent(
@@ -154,6 +154,7 @@ fun GroupSettingsScreen(groupId: String, me: Profile, onBack: () -> Unit, onLeft
         onEditPermission = vm::setEditPermission, onMessagePermission = vm::setMessagePermission,
         onRole = vm::setRole,
         onLeave = { vm.leave(onLeft) },
+        onMessage = onMessage,
     )
 }
 
@@ -172,6 +173,7 @@ fun GroupSettingsContent(
     onMessagePermission: (String) -> Unit,
     onRole: (userId: String, role: String) -> Unit,
     onLeave: () -> Unit,
+    onMessage: (userId: String) -> Unit = {},
 ) {
     val scheme = MaterialTheme.colorScheme
     val context = LocalContext.current
@@ -336,7 +338,7 @@ fun GroupSettingsContent(
                 members.forEach { p ->
                     MemberRow(
                         profile = p, isMe = p.id == ctx.me.id, isAdmin = ctx.isAdmin(p.id), canManage = ctx.isAdmin && !busy,
-                        onRole = { onRole(p.id, it) },
+                        onRole = { onRole(p.id, it) }, onMessage = { onMessage(p.id) },
                     )
                 }
 
@@ -386,7 +388,10 @@ private fun PermissionRow(
 }
 
 @Composable
-private fun MemberRow(profile: Profile, isMe: Boolean, isAdmin: Boolean, canManage: Boolean, onRole: (String) -> Unit) {
+private fun MemberRow(
+    profile: Profile, isMe: Boolean, isAdmin: Boolean, canManage: Boolean,
+    onRole: (String) -> Unit, onMessage: () -> Unit,
+) {
     val scheme = MaterialTheme.colorScheme
     var menu by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -402,10 +407,18 @@ private fun MemberRow(profile: Profile, isMe: Boolean, isAdmin: Boolean, canMana
                 container = scheme.primaryContainer, content = scheme.onPrimaryContainer,
             )
         }
-        if (canManage) {
+        if (canManage || !isMe) {
             Box {
                 IconButton(onClick = { menu = true }) { GngIcon(GngIcons.MoreVert, "Manage ${profile.displayName}") }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    if (!isMe) {
+                        DropdownMenuItem(
+                            text = { Text("Message") },
+                            leadingIcon = { GngIcon(GngIcons.ChatBubble, null) },
+                            onClick = { menu = false; onMessage() },
+                        )
+                    }
+                    if (!canManage) return@DropdownMenu
                     if (isAdmin) {
                         DropdownMenuItem(
                             text = { Text("Remove as admin") },

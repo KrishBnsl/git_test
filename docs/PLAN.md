@@ -110,13 +110,23 @@ The MVP's emoji-driven look was replaced with a proper **Material You (Material 
 - **Group settings** (tap the gang's name, or menu, Group settings). Anyone allowed to edit can change the gang's **photo**, name and icon. **Admins** choose who can edit the gang (members or admins only) and who can send messages (everyone or admins only), and can make or remove admins. If the last admin leaves, the longest-standing member is promoted.
 - All of this is enforced **in the database** (migration `0003`), not just hidden in the app: members can't change permissions, a locked chat rejects messages from non-admins, and group photos can only be uploaded to the gang's own folder.
 
+## 5d. Direct messages
+
+One-to-one chats between people who share a gang, reusing the gang chat's look.
+
+- **Who:** anyone in at least one of your gangs. Open a chat from the **Messages** icon on the home screen (with an unread badge), or tap **Message** on someone in the Squad list, on their map card, or in group settings.
+- **What:** realtime text, reactions, an inbox ordered by recent activity with previews and unread counts.
+- **Privacy:** only the two people can read a conversation (database row-level security). Conversations are created through a function that checks you share a gang. **If you stop sharing any gang with someone, neither of you can send new messages**, but you both keep the history. Leaving a shared gang is the way to cut contact.
+- Gang-level "who can send messages" settings don't apply to DMs.
+
 ## 6. Roadmap
 
 **Phase 2: make it sticky**
 - Push notifications (Firebase Cloud Messaging + a Supabase Edge Function): new lunch request, someone RSVP'd to your plan, birthday morning, exam tomorrow
 - Daily birthday post in chat (pg_cron)
 - Images in chat & lunch board photos
-- Reply threads, mentions (@name), message delete/edit
+- Push notifications (DMs and gang chat only show when the app is open for now)
+- Reply threads, mentions (@name), message delete/edit, block or mute someone in DMs, read receipts
 - Polls ("Domino's or Mic Mac?")
 
 **Phase 3: more fun**

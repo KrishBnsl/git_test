@@ -10,7 +10,8 @@ About 15 minutes, all free.
    Run each file **once**. Running one again fails with `relation ... already exists`, which is harmless.
    Already ran `0001` earlier? Just run `0002`.
    Then run `supabase/migrations/0003_group_settings_and_map.sql` (group photos and permissions, admin roles, map data).
-   All three can be run again safely if you're unsure whether you did.
+   Finally run `supabase/migrations/0004_direct_messages.sql` (direct messages).
+   All four can be run again safely if you're unsure whether you did.
 3. **Authentication → Providers → Email**: keep it enabled.
    For a friends-only app it's easiest to turn **Confirm email** *off*. Otherwise everyone has to click a link in their inbox before logging in.
 4. **Project Settings → API**: copy the **Project URL** and the **anon public** key.
@@ -48,7 +49,8 @@ adb shell am start -n com.gng.app/.debug.GalleryActivity --es screen chat --ez d
 `--es screen` takes `auth-signup`, `auth-login`, `profile-new`, `profile-edit`, `groups`, `groups-empty`, `chat`, `plans`,
 `squad`, `study`, `timetable`, `settings`, or a sheet: `sheet-plan`, `sheet-lunch`, `sheet-gang`, `sheet-join`, `sheet-pin`,
 `sheet-exam`, `sheet-material`, `sheet-class`, `sheet-group-edit`. Also `map`, `map-selected`, `map-empty`,
-`group-settings`, `group-settings-member` (the read-only view a regular member gets) and `chat-locked`. `--ez dark` switches to dark theme and `--ez dynamic` to wallpaper colours.
+`group-settings`, `group-settings-member` (the read-only view a regular member gets), `chat-locked`,
+`dm-inbox`, `dm-empty`, `dm-chat` and `sheet-new-message`. `--ez dark` switches to dark theme and `--ez dynamic` to wallpaper colours.
 The gallery only exists in debug builds; release builds don't contain it.
 
 ## 3. Get it onto your friends' phones

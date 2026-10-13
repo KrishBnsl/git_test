@@ -170,6 +170,12 @@ fun ChatContent(
     onReact: (Message, String) -> Unit,
     onOpenEvent: (Message) -> Unit,
     today: LocalDate = LocalDate.now(IST),
+    /** Hint text in the input, so a direct message can say "Message Aarav". */
+    placeholder: String = "Message the gang",
+    /** A conversation between two people: no names or avatars beside each message. */
+    oneToOne: Boolean = false,
+    emptyTitle: String = "It's quiet in here",
+    emptyBody: String = "Say hi, or start a lunch plan from the Plans tab.",
 ) {
     var draft by rememberSaveable { mutableStateOf("") }
     var reactingTo by remember { mutableStateOf<Long?>(null) }
@@ -183,11 +189,7 @@ fun ChatContent(
     Column(Modifier.fillMaxSize().imePadding()) {
         Box(Modifier.weight(1f)) {
             if (messages.isEmpty()) {
-                EmptyState(
-                    GngIcons.Forum, "It's quiet in here",
-                    "Say hi, or start a lunch plan from the Plans tab.",
-                    Modifier.align(Alignment.Center),
-                )
+                EmptyState(GngIcons.Forum, emptyTitle, emptyBody, Modifier.align(Alignment.Center))
             }
             LazyColumn(
                 state = listState,
@@ -203,7 +205,7 @@ fun ChatContent(
                         is ChatRow.Bubble -> {
                             val mine = row.m.userId == ctx.me.id
                             MessageBubble(
-                                m = row.m, ctx = ctx, mine = mine, first = row.first, last = row.last,
+                                m = row.m, ctx = ctx, mine = mine, first = row.first, last = row.last, oneToOne = oneToOne,
                                 reactions = reactions.filter { it.messageId == row.m.id },
                                 showPicker = reactingTo == row.m.id,
                                 onLongPress = { reactingTo = if (reactingTo == row.m.id) null else row.m.id },
@@ -215,7 +217,7 @@ fun ChatContent(
             }
         }
         if (ctx.canSendMessages) {
-            MessageInput(draft, { draft = it }, onSend = { onSend(draft); draft = "" })
+            MessageInput(draft, { draft = it }, placeholder, onSend = { onSend(draft); draft = "" })
         } else {
             ReadOnlyBar()
         }
@@ -243,6 +245,7 @@ private fun MessageBubble(
     mine: Boolean,
     first: Boolean,
     last: Boolean,
+    oneToOne: Boolean,
     reactions: List<Reaction>,
     showPicker: Boolean,
     onLongPress: () -> Unit,
@@ -263,7 +266,7 @@ private fun MessageBubble(
         Modifier.fillMaxWidth().padding(top = if (first) 8.dp else 0.dp),
         horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
     ) {
-        if (!mine && first) {
+        if (!mine && first && !oneToOne) {
             Text(
                 person.name,
                 style = MaterialTheme.typography.labelMedium,
@@ -272,7 +275,7 @@ private fun MessageBubble(
             )
         }
         Row(verticalAlignment = Alignment.Bottom) {
-            if (!mine) {
+            if (!mine && !oneToOne) {
                 if (last) Avatar(person.name, person.photoUrl, size = 32.dp, colorKey = person.key)
                 else Spacer(Modifier.width(32.dp))
                 Spacer(Modifier.width(8.dp))
@@ -291,7 +294,7 @@ private fun MessageBubble(
             }
         }
         Column(
-            Modifier.padding(start = if (mine) 0.dp else 40.dp),
+            Modifier.padding(start = if (mine || oneToOne) 0.dp else 40.dp),
             horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
         ) {
             if (reactions.isNotEmpty()) {
@@ -399,7 +402,7 @@ private fun ReadOnlyBar() {
 }
 
 @Composable
-private fun MessageInput(value: String, onValueChange: (String) -> Unit, onSend: () -> Unit) {
+private fun MessageInput(value: String, onValueChange: (String) -> Unit, placeholder: String, onSend: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
@@ -413,7 +416,7 @@ private fun MessageInput(value: String, onValueChange: (String) -> Unit, onSend:
             TextField(
                 value = value,
                 onValueChange = { onValueChange(it.take(2000)) },
-                placeholder = { Text("Message the gang") },
+                placeholder = { Text(placeholder) },
                 maxLines = 5,
                 colors = TextFieldDefaults.colors(
                     focusedContainerColor = Color.Transparent,

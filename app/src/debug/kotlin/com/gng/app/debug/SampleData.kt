@@ -1,5 +1,7 @@
 package com.gng.app.debug
 
+import com.gng.app.data.DmInboxRow
+import com.gng.app.data.DmMessage
 import com.gng.app.data.Exam
 import com.gng.app.data.Group
 import com.gng.app.data.CountRow
@@ -108,6 +110,23 @@ object SampleData {
     val votes = listOf(
         MaterialVote("m1", aarav.id, "g1"), MaterialVote("m1", me.id, "g1"), MaterialVote("m1", diya.id, "g1"),
         MaterialVote("m2", me.id, "g1"), MaterialVote("m3", bhavya.id, "g1"),
+    )
+
+    // Direct messages
+    val inbox = listOf(
+        DmInboxRow("t1", aarav.id, "are you coming to mic mac or not", aarav.id, ago(4), unread = 2),
+        DmInboxRow("t2", bhavya.id, "uploading the PYQs tonight", me.id, ago(60 * 5), unread = 0),
+        DmInboxRow("t3", diya.id, "thank you for the chai!!", diya.id, ago(60 * 26), unread = 0),
+        DmInboxRow("t4", chirag.id, "lab file kal tak?", me.id, ago(60 * 24 * 4), unread = 0),
+    )
+    val inboxPeople = people.associateBy { it.id }
+    val dmWithAarav = listOf(
+        DmMessage(1, "t1", me.id, "did you finish the DSA assignment", ago(60 * 3)),
+        DmMessage(2, "t1", aarav.id, "half of it, stuck on the last question", ago(60 * 3 - 2)),
+        DmMessage(3, "t1", aarav.id, "the one with the segment tree", ago(60 * 3 - 3)),
+        DmMessage(4, "t1", me.id, "same lol, let's do it together after lunch", ago(60 * 2)),
+        DmMessage(5, "t1", aarav.id, "deal", ago(60 * 2 - 1)),
+        DmMessage(6, "t1", aarav.id, "are you coming to mic mac or not", ago(4)),
     )
 
     // Spots around DTU Rohini

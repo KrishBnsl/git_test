@@ -3,6 +3,7 @@ package com.gng.app
 import android.content.Context
 import com.gng.app.data.AuthRepository
 import com.gng.app.data.ChatRepository
+import com.gng.app.data.DmRepository
 import com.gng.app.data.GroupRepository
 import com.gng.app.data.LocationRepository
 import com.gng.app.data.PlansRepository
@@ -23,6 +24,7 @@ class AppContainer(context: Context) {
     val groups by lazy { GroupRepository(client) }
     val chat by lazy { ChatRepository(client) }
     val plans by lazy { PlansRepository(client) }
+    val dms by lazy { DmRepository(client) }
     val timetable by lazy { TimetableRepository(client) }
     val locations by lazy { LocationRepository(client) }
     val study by lazy { StudyRepository(client) }

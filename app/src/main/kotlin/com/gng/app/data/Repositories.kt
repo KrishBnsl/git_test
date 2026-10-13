@@ -78,6 +78,14 @@ class ProfileRepository(private val client: SupabaseClient) {
         client.from("profiles").upsert(row)
     }
 
+    suspend fun getMany(ids: List<String>): List<Profile> =
+        if (ids.isEmpty()) emptyList()
+        else client.from("profiles").select { filter { isIn("id", ids) } }.decodeList()
+
+    /** Everyone you share a gang with (row-level security hides everyone else), minus yourself. */
+    suspend fun gangMates(myId: String): List<Profile> =
+        client.from("profiles").select().decodeList<Profile>().filter { it.id != myId }
+
     /** Uploads a square JPEG and returns its public URL. Each upload gets a fresh path, so caches never go stale. */
     suspend fun uploadAvatar(userId: String, jpeg: ByteArray): String {
         val path = "$userId/${UUID.randomUUID()}.jpg"
@@ -198,6 +206,55 @@ class ChatRepository(private val client: SupabaseClient) {
 
     /** Fires whenever a reaction in this group is added or removed. */
     fun reactionChanges(groupId: String): Flow<Unit> = anyChange(client, "reactions", groupId)
+}
+
+class DmRepository(private val client: SupabaseClient) {
+    /** Finds or creates your conversation with someone you share a gang with. */
+    suspend fun open(otherId: String): DmThread =
+        client.postgrest.rpc("open_dm", buildJsonObject { put("p_other", otherId) }).decodeAs()
+
+    suspend fun inbox(): List<DmInboxRow> = client.postgrest.rpc("dm_inbox").decodeList()
+
+    suspend fun messages(threadId: String, limit: Long = 100): List<DmMessage> =
+        client.from("dm_messages").select {
+            filter { eq("thread_id", threadId) }
+            order("id", Order.DESCENDING)
+            limit(limit)
+        }.decodeList<DmMessage>().reversed()
+
+    suspend fun send(threadId: String, body: String) {
+        client.from("dm_messages").insert(NewDmMessage(threadId, body))
+    }
+
+    suspend fun reactions(threadId: String): List<DmReaction> =
+        client.from("dm_reactions").select { filter { eq("thread_id", threadId) } }.decodeList()
+
+    suspend fun toggleReaction(message: DmMessage, emoji: String, userId: String, alreadyReacted: Boolean) {
+        if (alreadyReacted) {
+            client.from("dm_reactions").delete {
+                filter {
+                    eq("message_id", message.id)
+                    eq("user_id", userId)
+                    eq("emoji", emoji)
+                }
+            }
+        } else {
+            client.from("dm_reactions").insert(NewDmReaction(message.id, message.threadId, emoji))
+        }
+    }
+
+    suspend fun markRead(threadId: String) {
+        client.postgrest.rpc("mark_dm_read", buildJsonObject { put("p_thread", threadId) })
+    }
+
+    /** New messages in one conversation as they arrive. */
+    fun incoming(threadId: String): Flow<DmMessage> =
+        inserts(client, "dm_messages", "thread_id", threadId).map { it.decodeRecord<DmMessage>() }
+
+    fun reactionChanges(threadId: String): Flow<Unit> = rowChanges(client, "dm_reactions", "thread_id", threadId)
+
+    /** Any new message in any of your conversations (row-level security limits what you hear about). */
+    fun anyIncoming(): Flow<Unit> = inserts(client, "dm_messages", null, null).map { }
 }
 
 class PlansRepository(private val client: SupabaseClient) {
@@ -376,6 +433,21 @@ private fun rowChanges(client: SupabaseClient, table: String, column: String, va
     channel.subscribe()
     try {
         emitAll(changes.map { })
+    } finally {
+        withContext(NonCancellable) { client.realtime.removeChannel(channel) }
+    }
+}
+
+/** Inserts into a table, optionally only where [column] equals [value]. */
+private fun inserts(client: SupabaseClient, table: String, column: String?, value: String?): Flow<PostgresAction.Insert> = flow {
+    val channel = client.channel("$table-inserts-${value ?: "all"}-${UUID.randomUUID()}")
+    val changes = channel.postgresChangeFlow<PostgresAction.Insert>(schema = "public") {
+        this.table = table
+        if (column != null && value != null) filter(column, FilterOperator.EQ, value)
+    }
+    channel.subscribe()
+    try {
+        emitAll(changes)
     } finally {
         withContext(NonCancellable) { client.realtime.removeChannel(channel) }
     }

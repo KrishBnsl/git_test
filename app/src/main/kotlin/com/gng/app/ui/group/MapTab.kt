@@ -33,6 +33,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
@@ -82,7 +83,7 @@ private val RING = 3.dp
 private val MARKER_WIDTH = 84.dp
 
 @Composable
-fun MapTab(ctx: GroupContext, onOpenSquad: () -> Unit) {
+fun MapTab(ctx: GroupContext, onOpenSquad: () -> Unit, onMessage: (String) -> Unit) {
     val pv = gngViewModel(key = "presence-${ctx.group.id}") { PresenceViewModel(it, ctx.group.id) }
     PresencePolling(pv)
     MessageEffect(pv.error, pv::dismissError)
@@ -96,6 +97,7 @@ fun MapTab(ctx: GroupContext, onOpenSquad: () -> Unit) {
         onSelect = { selected = it },
         onMyLocation = { context.container.checkIn.currentLatLng() },
         onOpenSquad = onOpenSquad,
+        onMessage = onMessage,
         onDirections = { pin, name ->
             val uri = Uri.parse("geo:${pin.point.lat},${pin.point.lng}?q=${pin.point.lat},${pin.point.lng}(${Uri.encode(name)})")
             context.startActivity(Intent(Intent.ACTION_VIEW, uri))
@@ -113,6 +115,7 @@ fun MapContent(
     onMyLocation: suspend () -> LatLng?,
     onOpenSquad: () -> Unit,
     onDirections: (MapPin, String) -> Unit,
+    onMessage: (String) -> Unit = {},
 ) {
     val scheme = MaterialTheme.colorScheme
     val density = LocalDensity.current
@@ -188,7 +191,11 @@ fun MapContent(
                 var shown by remember { mutableStateOf(picked) }
                 if (picked != null) shown = picked
                 shown?.let { pin ->
-                    PinCard(ctx, pin, onClose = { onSelect(null) }, onDirections = { onDirections(pin, ctx.nameOf(pin.userId)) })
+                    PinCard(
+                        ctx, pin, onClose = { onSelect(null) },
+                        onDirections = { onDirections(pin, ctx.nameOf(pin.userId)) },
+                        onMessage = { onMessage(pin.userId) },
+                    )
                 }
             }
             AnimatedVisibility(visible = loaded && pins.isEmpty() && picked == null) {
@@ -294,7 +301,7 @@ private fun PulseRing(color: Color) {
 }
 
 @Composable
-private fun PinCard(ctx: GroupContext, pin: MapPin, onClose: () -> Unit, onDirections: () -> Unit) {
+private fun PinCard(ctx: GroupContext, pin: MapPin, onClose: () -> Unit, onDirections: () -> Unit, onMessage: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
     val person = ctx.person(pin.userId)
     val profile = ctx.members[pin.userId]
@@ -327,15 +334,22 @@ private fun PinCard(ctx: GroupContext, pin: MapPin, onClose: () -> Unit, onDirec
                 }
                 IconButton(onClick = onClose) { GngIcon(GngIcons.Close, "Close") }
             }
+            Spacer(Modifier.height(10.dp))
+            if (pin.exact) {
+                InfoChip("Exact location", icon = GngIcons.Sensors, container = scheme.tertiaryContainer, content = scheme.onTertiaryContainer)
+            } else {
+                InfoChip("On their spot, not exact", icon = GngIcons.LocationOn)
+            }
             Spacer(Modifier.height(12.dp))
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (pin.exact) {
-                    InfoChip("Exact", icon = GngIcons.Sensors, container = scheme.tertiaryContainer, content = scheme.onTertiaryContainer)
-                } else {
-                    InfoChip("On their spot, not exact", icon = GngIcons.LocationOn)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (pin.userId != ctx.me.id) {
+                    OutlinedButton(onClick = onMessage, modifier = Modifier.weight(1f)) {
+                        GngIcon(GngIcons.ChatBubble, null, size = 18.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Message")
+                    }
                 }
-                Spacer(Modifier.weight(1f))
-                Button(onClick = onDirections) {
+                Button(onClick = onDirections, modifier = Modifier.weight(1f)) {
                     GngIcon(GngIcons.Directions, null, size = 18.dp)
                     Spacer(Modifier.width(8.dp))
                     Text("Open in Maps")

@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -99,14 +101,14 @@ class GroupsViewModel(private val repo: GroupRepository) : ViewModel() {
 }
 
 @Composable
-fun GroupsScreen(me: Profile, onOpen: (Group) -> Unit, onSettings: () -> Unit) {
+fun GroupsScreen(me: Profile, unreadDms: Int, onOpen: (Group) -> Unit, onSettings: () -> Unit, onMessages: () -> Unit) {
     val vm = gngViewModel { GroupsViewModel(it.groups) }
     LaunchedEffect(Unit) { vm.refresh() }
     var sheet by remember { mutableStateOf<GangSheetMode?>(null) }
 
     GroupsContent(
-        me = me, groups = vm.groups, refreshing = vm.refreshing, error = vm.error, onDismissError = vm::dismissError,
-        onRefresh = { vm.refresh() }, onOpen = onOpen, onSettings = onSettings,
+        me = me, unreadDms = unreadDms, groups = vm.groups, refreshing = vm.refreshing, error = vm.error, onDismissError = vm::dismissError,
+        onRefresh = { vm.refresh() }, onOpen = onOpen, onSettings = onSettings, onMessages = onMessages,
         onStart = { sheet = GangSheetMode.Start }, onJoin = { sheet = GangSheetMode.Join },
     )
 
@@ -126,6 +128,7 @@ enum class GangSheetMode { Start, Join }
 @Composable
 fun GroupsContent(
     me: Profile,
+    unreadDms: Int,
     groups: List<Group>?,
     refreshing: Boolean,
     error: String?,
@@ -133,6 +136,7 @@ fun GroupsContent(
     onRefresh: () -> Unit,
     onOpen: (Group) -> Unit,
     onSettings: () -> Unit,
+    onMessages: () -> Unit,
     onStart: () -> Unit,
     onJoin: () -> Unit,
 ) {
@@ -153,6 +157,11 @@ fun GroupsContent(
             LargeTopAppBar(
                 title = { Text("Hey, ${me.displayName.substringBefore(' ')}") },
                 actions = {
+                    IconButton(onClick = onMessages) {
+                        BadgedBox(badge = { if (unreadDms > 0) Badge { Text(if (unreadDms > 99) "99+" else unreadDms.toString()) } }) {
+                            GngIcon(GngIcons.ChatBubble, "Messages")
+                        }
+                    }
                     IconButton(onClick = onSettings) { Avatar(me.displayName, me.avatarUrl, size = 36.dp, colorKey = me.id) }
                 },
                 scrollBehavior = scroll,

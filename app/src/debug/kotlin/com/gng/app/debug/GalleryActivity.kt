@@ -13,7 +13,13 @@ import com.gng.app.data.PlanKind
 import com.gng.app.data.SharingMode
 import com.gng.app.data.SharingState
 import com.gng.app.data.ThemeMode
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.remember
 import com.gng.app.ui.auth.AuthContent
+import com.gng.app.ui.dm.DmChatContent
+import com.gng.app.ui.dm.DmInboxContent
+import com.gng.app.ui.dm.NewMessageSheet
+import com.gng.app.ui.dm.asMessage
 import com.gng.app.ui.group.AddExamSheet
 import com.gng.app.ui.group.AddMaterialSheet
 import com.gng.app.ui.group.ChatContent
@@ -78,8 +84,8 @@ private fun Screen(name: String) {
         "auth-login" -> AuthContent(false, {}, false, "Wrong email or password", null, {_, _ -> }, "krish@dtu.ac.in")
         "profile-new" -> ProfileForm(null, false, null, {}, {})
         "profile-edit" -> ProfileForm(s.me, false, null, {}, {}, onBack = {})
-        "groups" -> GroupsContent(s.me, s.groups, false, null, {}, {}, {}, {}, {}, {})
-        "groups-empty" -> GroupsContent(s.me, emptyList(), false, null, {}, {}, {}, {}, {}, {})
+        "groups" -> GroupsContent(s.me, 3, s.groups, false, null, {}, {}, {}, {}, {}, {}, {})
+        "groups-empty" -> GroupsContent(s.me, 0, emptyList(), false, null, {}, {}, {}, {}, {}, {}, {})
         "chat" -> Group(GroupTab.Chat) { ChatContent(s.ctx, s.messages, s.reactions, {}, { _, _ -> }, {}) }
         "chat-empty" -> Group(GroupTab.Chat) { ChatContent(s.ctx, emptyList(), emptyList(), {}, { _, _ -> }, {}) }
         "plans" -> Group(GroupTab.Plans) {
@@ -94,7 +100,7 @@ private fun Screen(name: String) {
                 com.gng.core.Birthdays.upcoming(
                     s.ctx.members.values.mapNotNull { p -> p.birthdayDate?.let { com.gng.core.Birthday(p.id, p.displayName, it) } },
                     java.time.LocalDate.now(),
-                ), {}, {}, {}, {}, { _, _ -> }, SampleData.now,
+                ), {}, {}, {}, {}, { _, _ -> }, {}, SampleData.now,
             )
         }
         "study" -> Group(GroupTab.Study) {
@@ -111,6 +117,16 @@ private fun Screen(name: String) {
         "group-settings" -> GroupSettingsContent(s.ctx, false, null, {}, {}, {}, {}, { _, _ -> }, {}, {}, { _, _ -> }, {})
         "group-settings-member" -> GroupSettingsContent(s.memberCtx, false, null, {}, {}, {}, {}, { _, _ -> }, {}, {}, { _, _ -> }, {})
         "sheet-group-edit" -> EditGroupSheet("Hostel H4 Maggi Club", "restaurant", {}, { _, _ -> })
+        "dm-inbox" -> DmInboxContent(s.me, s.inbox, s.inboxPeople, null, {}, {}, {}, {})
+        "dm-empty" -> DmInboxContent(s.me, emptyList(), emptyMap(), null, {}, {}, {}, {})
+        "dm-chat" -> {
+            val aarav = s.inboxPeople.getValue("u-aarav")
+            DmChatContent(
+                s.me, aarav, "t1", false, null,
+                s.dmWithAarav.map { it.asMessage() }, emptyList(), remember { SnackbarHostState() }, {}, {}, {}, { _, _ -> },
+            )
+        }
+        "sheet-new-message" -> NewMessageSheet(s.people.filter { it.id != s.me.id }, {}, {})
         "sheet-plan" -> NewPlanSheet(PlanKind.Lunch, "g1", {}, {})
         "sheet-lunch" -> LunchSheet({}, { _, _, _ -> })
         "sheet-gang" -> NewGangSheet(GangSheetMode.Start, false, null, {}, { _, _ -> }, {})

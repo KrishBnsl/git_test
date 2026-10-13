@@ -23,6 +23,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -143,7 +144,7 @@ class SquadViewModel(private val c: AppContainer, private val ctx: GroupContext)
 }
 
 @Composable
-fun SquadTab(ctx: GroupContext, onTimetable: () -> Unit) {
+fun SquadTab(ctx: GroupContext, onTimetable: () -> Unit, onMessage: (String) -> Unit) {
     val vm = gngViewModel(key = "squad-${ctx.group.id}") { SquadViewModel(it, ctx) }
     val sharing by vm.sharing.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -180,6 +181,7 @@ fun SquadTab(ctx: GroupContext, onTimetable: () -> Unit) {
                 Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)),
             )
         },
+        onMessage = onMessage,
         onFind = { p, who ->
             val uri = Uri.parse("geo:${p.lat},${p.lng}?q=${p.lat},${p.lng}(${Uri.encode(who)})")
             context.startActivity(Intent(Intent.ACTION_VIEW, uri))
@@ -205,6 +207,7 @@ fun SquadContent(
     onPin: () -> Unit,
     onLocationSettings: () -> Unit,
     onFind: (Presence, String) -> Unit,
+    onMessage: (String) -> Unit = {},
     now: Instant = Instant.now(),
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -286,7 +289,7 @@ fun SquadContent(
                     isMe = p.id == ctx.me.id,
                     presence = presence[p.id],
                     classStatus = classes[p.id]?.let { Timetable.status(it, nowIst) },
-                    myLatLng = myLatLng, now = now, onFind = onFind,
+                    myLatLng = myLatLng, now = now, onFind = onFind, onMessage = { onMessage(p.id) },
                 )
             }
             item {
@@ -332,6 +335,7 @@ private fun MemberRow(
     name: String, photoUrl: String?, id: String, status: String?, isMe: Boolean,
     presence: Presence?, classStatus: ClassStatus?, myLatLng: LatLng?, now: Instant,
     onFind: (Presence, String) -> Unit,
+    onMessage: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
     val info = presence?.let { PresenceLogic.describe(it.zoneName, parseInstant(it.updatedAt), now) }
@@ -362,16 +366,21 @@ private fun MemberRow(
                 null -> Unit
             }
         }
-        if (presence?.lat != null && presence.lng != null && !isMe) {
-            Column(horizontalAlignment = Alignment.End) {
-                FilledTonalIconButton(onClick = { onFind(presence, name) }) { GngIcon(GngIcons.NearMe, "Find $name") }
-                myLatLng?.let {
-                    Text(
-                        Geo.prettyDistance(Geo.distanceMeters(it, LatLng(presence.lat, presence.lng))),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = scheme.onSurfaceVariant,
-                    )
+        Row(verticalAlignment = Alignment.Top) {
+            if (presence?.lat != null && presence.lng != null && !isMe) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    FilledTonalIconButton(onClick = { onFind(presence, name) }) { GngIcon(GngIcons.NearMe, "Find $name") }
+                    myLatLng?.let {
+                        Text(
+                            Geo.prettyDistance(Geo.distanceMeters(it, LatLng(presence.lat, presence.lng))),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = scheme.onSurfaceVariant,
+                        )
+                    }
                 }
+            }
+            if (!isMe) {
+                IconButton(onClick = onMessage) { GngIcon(GngIcons.ChatBubble, "Message $name", tint = scheme.onSurfaceVariant) }
             }
         }
     }
