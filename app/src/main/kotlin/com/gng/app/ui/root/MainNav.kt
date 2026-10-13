@@ -1,5 +1,10 @@
 package com.gng.app.ui.root
 
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.runtime.Composable
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -11,10 +16,20 @@ import com.gng.app.ui.profile.ProfileScreen
 import com.gng.app.ui.settings.SettingsScreen
 import com.gng.app.ui.timetable.TimetableScreen
 
+private const val DURATION = 300
+
 @Composable
 fun MainNav(me: Profile, onProfileSaved: (Profile) -> Unit) {
     val nav = rememberNavController()
-    NavHost(nav, startDestination = "groups") {
+    NavHost(
+        nav,
+        startDestination = "groups",
+        // Forward navigation fades in with a short slide; going back mirrors it.
+        enterTransition = { fadeIn(tween(DURATION)) + slideInHorizontally(tween(DURATION)) { it / 14 } },
+        exitTransition = { fadeOut(tween(DURATION / 2)) },
+        popEnterTransition = { fadeIn(tween(DURATION)) },
+        popExitTransition = { fadeOut(tween(DURATION / 2)) + slideOutHorizontally(tween(DURATION)) { it / 14 } },
+    ) {
         composable("groups") {
             GroupsScreen(
                 me = me,
@@ -40,10 +55,15 @@ fun MainNav(me: Profile, onProfileSaved: (Profile) -> Unit) {
             )
         }
         composable("profile") {
-            ProfileScreen(userId = me.id, existing = me, onSaved = {
-                onProfileSaved(it)
-                nav.popBackStack()
-            })
+            ProfileScreen(
+                userId = me.id,
+                existing = me,
+                onSaved = {
+                    onProfileSaved(it)
+                    nav.popBackStack()
+                },
+                onBack = { nav.popBackStack() },
+            )
         }
     }
 }

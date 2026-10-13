@@ -1,6 +1,7 @@
 package com.gng.app.data
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -25,12 +26,16 @@ private val Context.dataStore by preferencesDataStore("gng_settings")
 
 class SettingsStore(private val context: Context) {
     private val themeKey = stringPreferencesKey("theme")
+    private val dynamicColorKey = booleanPreferencesKey("dynamic_color")
     private val sharingKey = stringPreferencesKey("sharing")
     private val liveUntilKey = longPreferencesKey("live_until")
 
     val theme: Flow<ThemeMode> = context.dataStore.data.map { prefs ->
         prefs[themeKey]?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() } ?: ThemeMode.System
     }
+
+    /** Use wallpaper colours on Android 12+. On by default; the brand palette is the alternative. */
+    val dynamicColor: Flow<Boolean> = context.dataStore.data.map { it[dynamicColorKey] ?: true }
 
     val sharing: Flow<SharingState> = context.dataStore.data.map { prefs ->
         SharingState(
@@ -43,6 +48,10 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setTheme(mode: ThemeMode) {
         context.dataStore.edit { it[themeKey] = mode.name }
+    }
+
+    suspend fun setDynamicColor(enabled: Boolean) {
+        context.dataStore.edit { it[dynamicColorKey] = enabled }
     }
 
     suspend fun setSharing(mode: SharingMode, liveUntil: Instant? = null) {

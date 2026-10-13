@@ -27,12 +27,15 @@ class TimetableTest {
     fun statusInClass() {
         val s = Timetable.status(me, monday.withHour(9).withMinute(30))
         assertIs<ClassStatus.InClass>(s)
-        assertEquals("📖 in DSA till 10am", Timetable.label(s))
+        assertEquals("DSA", s.slot.subject)
+        assertEquals("10am", s.slot.end.hhmm())
     }
 
     @Test
     fun statusFreeBetweenClasses() {
-        assertEquals("🟢 free till 11am", Timetable.label(Timetable.status(me, monday.withHour(10).withMinute(15))))
+        val s = Timetable.status(me, monday.withHour(10).withMinute(15))
+        assertIs<ClassStatus.Free>(s)
+        assertEquals("11am", s.nextClass.start.hhmm())
     }
 
     @Test

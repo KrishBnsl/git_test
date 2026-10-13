@@ -1,6 +1,5 @@
 package com.gng.app.ui.groups
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,21 +8,26 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -32,40 +36,52 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.gng.app.data.Group
 import com.gng.app.data.GroupRepository
 import com.gng.app.data.Profile
-import com.gng.app.ui.components.BouncyButton
-import com.gng.app.ui.components.EmojiStrip
+import com.gng.app.ui.components.Avatar
+import com.gng.app.ui.components.Choice
 import com.gng.app.ui.components.EmptyState
-import com.gng.app.ui.components.ErrorBanner
-import com.gng.app.ui.components.FunCard
-import com.gng.app.ui.components.GROUP_EMOJIS
+import com.gng.app.ui.components.GngIcon
+import com.gng.app.ui.components.GngSheet
+import com.gng.app.ui.components.IconPicker
+import com.gng.app.ui.components.InfoChip
+import com.gng.app.ui.components.Loading
+import com.gng.app.ui.components.SegmentedChoice
+import com.gng.app.ui.components.TonalIcon
 import com.gng.app.ui.friendly
 import com.gng.app.ui.gngViewModel
+import com.gng.app.ui.icons.GngIcons
+import com.gng.app.ui.icons.GroupIcons
 import com.gng.core.InviteCodes
 import kotlinx.coroutines.launch
 
-class GroupsViewModel(private val repo: GroupRepository, private val userId: String) : ViewModel() {
+class GroupsViewModel(private val repo: GroupRepository) : ViewModel() {
     var groups by mutableStateOf<List<Group>?>(null)
+        private set
+    var refreshing by mutableStateOf(false)
         private set
     var error by mutableStateOf<String?>(null)
         private set
     var busy by mutableStateOf(false)
         private set
 
+    fun dismissError() { error = null }
+
     fun refresh() = viewModelScope.launch {
-        runCatching { repo.myGroups(userId) }
+        refreshing = true
+        runCatching { repo.myGroups() }
             .onSuccess { groups = it.sortedBy { g -> g.name.lowercase() }; error = null }
             .onFailure { error = it.friendly(); if (groups == null) groups = emptyList() }
+        refreshing = false
     }
 
-    fun create(name: String, emoji: String, onDone: (Group) -> Unit) = act(onDone) { repo.create(name, emoji) }
+    fun create(name: String, icon: String, onDone: (Group) -> Unit) = act(onDone) { repo.create(name, icon) }
 
     fun join(code: String, onDone: (Group) -> Unit) = act(onDone) { repo.join(code) }
 
@@ -82,107 +98,192 @@ class GroupsViewModel(private val repo: GroupRepository, private val userId: Str
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GroupsScreen(me: Profile, onOpen: (Group) -> Unit, onSettings: () -> Unit) {
-    val vm = gngViewModel { GroupsViewModel(it.groups, me.id) }
+    val vm = gngViewModel { GroupsViewModel(it.groups) }
     LaunchedEffect(Unit) { vm.refresh() }
-    var dialog by remember { mutableStateOf<String?>(null) } // "create" | "join"
+    var sheet by remember { mutableStateOf<GangSheetMode?>(null) }
+
+    GroupsContent(
+        me = me, groups = vm.groups, refreshing = vm.refreshing, error = vm.error, onDismissError = vm::dismissError,
+        onRefresh = { vm.refresh() }, onOpen = onOpen, onSettings = onSettings,
+        onStart = { sheet = GangSheetMode.Start }, onJoin = { sheet = GangSheetMode.Join },
+    )
+
+    sheet?.let { mode ->
+        NewGangSheet(
+            initial = mode, busy = vm.busy, error = vm.error,
+            onDismiss = { sheet = null; vm.dismissError() },
+            onCreate = { name, icon -> vm.create(name, icon) { sheet = null; onOpen(it) } },
+            onJoin = { code -> vm.join(code) { sheet = null; onOpen(it) } },
+        )
+    }
+}
+
+enum class GangSheetMode { Start, Join }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun GroupsContent(
+    me: Profile,
+    groups: List<Group>?,
+    refreshing: Boolean,
+    error: String?,
+    onDismissError: () -> Unit,
+    onRefresh: () -> Unit,
+    onOpen: (Group) -> Unit,
+    onSettings: () -> Unit,
+    onStart: () -> Unit,
+    onJoin: () -> Unit,
+) {
+    val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val snackbar = remember { SnackbarHostState() }
+    // Sheet errors show inside the sheet; list errors show as a snackbar.
+    LaunchedEffect(error, groups) {
+        if (error != null && groups != null && groups.isEmpty()) {
+            snackbar.showSnackbar(error)
+            onDismissError()
+        }
+    }
 
     Scaffold(
+        modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
-            TopAppBar(
-                title = { Text("hey ${me.displayName} ${me.emoji}") },
-                actions = { IconButton(onClick = onSettings) { Icon(Icons.Filled.Settings, "Settings") } },
+            LargeTopAppBar(
+                title = { Text("Hey, ${me.displayName.substringBefore(' ')}") },
+                actions = {
+                    IconButton(onClick = onSettings) { Avatar(me.displayName, me.avatarUrl, size = 36.dp, colorKey = me.id) }
+                },
+                scrollBehavior = scroll,
             )
         },
+        floatingActionButton = {
+            if (!groups.isNullOrEmpty()) {
+                ExtendedFloatingActionButton(
+                    onClick = onStart,
+                    icon = { GngIcon(GngIcons.Add, null) },
+                    text = { Text("New gang") },
+                )
+            }
+        },
     ) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
-            item {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
-                    BouncyButton("➕ New gang", { dialog = "create" }, Modifier.weight(1f))
-                    BouncyButton(
-                        "🔑 Join with code", { dialog = "join" }, Modifier.weight(1f),
-                        container = MaterialTheme.colorScheme.secondary,
-                        content = MaterialTheme.colorScheme.onSecondary,
+        PullToRefreshBox(isRefreshing = refreshing, onRefresh = onRefresh, modifier = Modifier.padding(padding)) {
+            when {
+                groups == null -> Loading()
+                groups.isEmpty() -> Column(
+                    Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    EmptyState(
+                        GngIcons.Groups, "No gangs yet",
+                        "Start one and share the code in your WhatsApp group, or join a friend's.",
+                        action = {
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Button(onClick = onStart) { Text("Start a gang") }
+                                OutlinedButton(onClick = onJoin) { Text("Join with code") }
+                            }
+                        },
                     )
                 }
-                ErrorBanner(vm.error)
-            }
-            val groups = vm.groups
-            if (groups != null && groups.isEmpty()) {
-                item { EmptyState("🦗", "No gangs yet", "Start one and drop the code in your WhatsApp group.") }
-            }
-            items(groups.orEmpty(), key = { it.id }) { g ->
-                FunCard(Modifier.clickable { onOpen(g) }) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(g.emoji, fontSize = 36.sp)
-                        Column(Modifier.padding(start = 16.dp)) {
-                            Text(g.name, style = MaterialTheme.typography.titleLarge)
-                            Text("code ${g.inviteCode}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                else -> LazyColumn(
+                    Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    items(groups, key = { it.id }) { g -> GangCard(g, onClick = { onOpen(g) }) }
+                    item {
+                        OutlinedButton(onClick = onJoin, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                            GngIcon(GngIcons.Key, null, size = 18.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Join with a code")
                         }
+                        Spacer(Modifier.height(96.dp)) // room for the FAB
                     }
                 }
             }
         }
     }
+}
 
-    when (dialog) {
-        "create" -> CreateDialog(busy = vm.busy, error = vm.error, onDismiss = { dialog = null }) { name, emoji ->
-            vm.create(name, emoji) { dialog = null; onOpen(it) }
-        }
-        "join" -> JoinDialog(busy = vm.busy, error = vm.error, onDismiss = { dialog = null }) { code ->
-            vm.join(code) { dialog = null; onOpen(it) }
+@Composable
+private fun GangCard(g: Group, onClick: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    Card(
+        onClick = onClick,
+        colors = CardDefaults.cardColors(containerColor = scheme.surfaceContainer),
+        shape = MaterialTheme.shapes.large,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            TonalIcon(
+                GroupIcons.resolve(g.icon).icon, size = 56.dp,
+                container = scheme.primaryContainer, content = scheme.onPrimaryContainer,
+            )
+            Column(Modifier.padding(horizontal = 16.dp).weight(1f)) {
+                Text(g.name, style = MaterialTheme.typography.titleMedium, maxLines = 1)
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    InfoChip("${g.memberCount} ${if (g.memberCount == 1) "member" else "members"}", icon = GngIcons.PersonFill)
+                    InfoChip(g.inviteCode, icon = GngIcons.Key)
+                }
+            }
+            GngIcon(GngIcons.ChevronRight, null, tint = scheme.onSurfaceVariant)
         }
     }
 }
 
 @Composable
-private fun CreateDialog(busy: Boolean, error: String?, onDismiss: () -> Unit, onCreate: (String, String) -> Unit) {
+fun NewGangSheet(
+    initial: GangSheetMode,
+    busy: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onCreate: (name: String, icon: String) -> Unit,
+    onJoin: (code: String) -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    var mode by remember { mutableStateOf(initial) }
     var name by remember { mutableStateOf("") }
-    var emoji by remember { mutableStateOf(GROUP_EMOJIS.first()) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Start a gang") },
-        text = {
-            Column {
-                EmojiStrip(GROUP_EMOJIS, emoji) { emoji = it }
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    name, { name = it.take(40) }, label = { Text("Name") }, singleLine = true,
-                    placeholder = { Text("Hostel H4 Maggi Club") },
-                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                ErrorBanner(error, Modifier.padding(top = 8.dp))
-            }
-        },
-        confirmButton = {
-            TextButton(enabled = name.isNotBlank() && !busy, onClick = { onCreate(name.trim(), emoji) }) { Text("Create") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Nah") } },
-    )
-}
-
-@Composable
-private fun JoinDialog(busy: Boolean, error: String?, onDismiss: () -> Unit, onJoin: (String) -> Unit) {
+    var icon by remember { mutableStateOf(GroupIcons.default.key) }
     var code by remember { mutableStateOf("") }
     val normalized = InviteCodes.normalize(code)
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Got a code?") },
-        text = {
-            Column {
-                OutlinedTextField(
-                    code, { code = it.take(12) }, label = { Text("6-character code") }, singleLine = true,
-                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
-                )
-                ErrorBanner(error, Modifier.padding(top = 8.dp))
-            }
-        },
-        confirmButton = {
-            TextButton(enabled = normalized != null && !busy, onClick = { normalized?.let(onJoin) }) { Text("Join") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
+
+    GngSheet(title = if (mode == GangSheetMode.Start) "Start a gang" else "Join a gang", onDismiss = onDismiss) {
+        SegmentedChoice(
+            choices = listOf(
+                Choice(GangSheetMode.Start, "Start new", GngIcons.Add),
+                Choice(GangSheetMode.Join, "Join with code", GngIcons.Key),
+            ),
+            selected = mode, onSelect = { mode = it }, checkIcon = GngIcons.Check,
+        )
+        Spacer(Modifier.height(20.dp))
+        if (mode == GangSheetMode.Start) {
+            IconPicker(GroupIcons, icon) { icon = it }
+            Spacer(Modifier.height(16.dp))
+            OutlinedTextField(
+                name, { name = it.take(40) }, label = { Text("Name") }, placeholder = { Text("Hostel H4 Maggi Club") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        } else {
+            OutlinedTextField(
+                code, { code = it.take(12) }, label = { Text("6-character code") },
+                leadingIcon = { GngIcon(GngIcons.Key, null) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        if (error != null) {
+            Text(error, color = scheme.error, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 12.dp))
+        }
+        Spacer(Modifier.height(24.dp))
+        Button(
+            enabled = !busy && if (mode == GangSheetMode.Start) name.isNotBlank() else normalized != null,
+            onClick = { if (mode == GangSheetMode.Start) onCreate(name.trim(), icon) else normalized?.let(onJoin) },
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+        ) { Text(if (mode == GangSheetMode.Start) "Create gang" else "Join gang") }
+    }
 }

@@ -3,7 +3,6 @@ package com.gng.app.ui.group
 import android.Manifest
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -13,13 +12,19 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -33,7 +38,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
@@ -46,21 +50,24 @@ import com.gng.app.data.SharingMode
 import com.gng.app.data.SharingState
 import com.gng.app.data.parseInstant
 import com.gng.app.location.CheckIn
-import com.gng.app.ui.components.BouncyButton
-import com.gng.app.ui.components.ChipRow
-import com.gng.app.ui.components.EmojiAvatar
-import com.gng.app.ui.components.EmojiConfetti
-import com.gng.app.ui.components.EmojiStrip
-import com.gng.app.ui.components.ErrorBanner
-import com.gng.app.ui.components.FunCard
+import com.gng.app.ui.components.Choice
+import com.gng.app.ui.components.Confetti
+import com.gng.app.ui.components.GngIcon
+import com.gng.app.ui.components.GngSheet
+import com.gng.app.ui.components.IconPicker
+import com.gng.app.ui.components.MessageEffect
 import com.gng.app.ui.components.SectionHeader
+import com.gng.app.ui.components.SegmentedChoice
+import com.gng.app.ui.components.StatusAvatar
+import com.gng.app.ui.components.TonalIcon
 import com.gng.app.ui.friendly
 import com.gng.app.ui.gngViewModel
-import com.gng.app.ui.theme.LocalIsDark
-import com.gng.app.ui.theme.friendColor
+import com.gng.app.ui.icons.GngIcons
+import com.gng.app.ui.icons.ZoneIcons
 import com.gng.core.Birthday
 import com.gng.core.Birthdays
 import com.gng.core.ClassSlot
+import com.gng.core.ClassStatus
 import com.gng.core.Geo
 import com.gng.core.LatLng
 import com.gng.core.Timetable
@@ -74,9 +81,10 @@ import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
-import com.gng.core.Presence as PresenceText
+import java.time.format.DateTimeFormatter
+import com.gng.core.Presence as PresenceLogic
 
-private val ZONE_EMOJIS = listOf("📍", "📚", "🍟", "☕", "🏠", "🏀", "🎭", "🧪", "💻", "🌳")
+private val BIRTHDAY_DATE = DateTimeFormatter.ofPattern("d MMM")
 
 class SquadViewModel(private val c: AppContainer, private val ctx: GroupContext) : ViewModel() {
     var presence by mutableStateOf<Map<String, Presence>>(emptyMap())
@@ -86,7 +94,9 @@ class SquadViewModel(private val c: AppContainer, private val ctx: GroupContext)
     var myLatLng by mutableStateOf<LatLng?>(null)
         private set
     var message by mutableStateOf<String?>(null)
+        private set
     var error by mutableStateOf<String?>(null)
+        private set
 
     val sharing = c.settings.sharing.stateIn(viewModelScope, SharingStarted.Eagerly, SharingState(SharingMode.Off, null))
 
@@ -110,6 +120,9 @@ class SquadViewModel(private val c: AppContainer, private val ctx: GroupContext)
         }
     }
 
+    fun dismissMessage() { message = null }
+    fun dismissError() { error = null }
+
     private suspend fun refreshPresence() {
         runCatching { presence = c.locations.presence(ctx.group.id).associateBy { it.userId } }
             .onFailure { error = it.friendly() }
@@ -118,8 +131,8 @@ class SquadViewModel(private val c: AppContainer, private val ctx: GroupContext)
 
     fun checkInNow() = viewModelScope.launch {
         message = when (val r = runCatching { c.checkIn.run() }.getOrElse { error = it.friendly(); return@launch }) {
-            is CheckIn.Result.Shared -> "Checked in " + (r.zoneName?.let { "at $it ✅" } ?: "(not at a pinned spot)")
-            CheckIn.Result.SharingOff -> "Sharing is off, nobody sees you 👻"
+            is CheckIn.Result.Shared -> r.zoneName?.let { "Checked in at $it" } ?: "Checked in, but not at a pinned spot"
+            CheckIn.Result.SharingOff -> "Sharing is off, nobody can see you"
             CheckIn.Result.NoPermission -> "Location permission needed"
             CheckIn.Result.NoFix -> "Couldn't get a GPS fix, try again outside"
         }
@@ -131,10 +144,12 @@ class SquadViewModel(private val c: AppContainer, private val ctx: GroupContext)
         refreshPresence()
     }
 
-    fun pinHere(name: String, emoji: String, radius: Int) = viewModelScope.launch {
+    fun denyPermission() { message = "Without location permission there are no check-ins" }
+
+    fun pinHere(name: String, icon: String, radius: Int) = viewModelScope.launch {
         val here = c.checkIn.currentLatLng() ?: run { message = "Couldn't get your location"; return@launch }
-        runCatching { c.locations.pinZone(NewZone(ctx.group.id, name, emoji, here.lat, here.lng, radius)) }
-            .onSuccess { message = "$emoji $name pinned! Check-ins nearby will snap to it."; checkInNow() }
+        runCatching { c.locations.pinZone(NewZone(ctx.group.id, name, icon, here.lat, here.lng, radius)) }
+            .onSuccess { message = "$name pinned. Check-ins nearby will snap to it."; checkInNow() }
             .onFailure { error = it.friendly() }
     }
 }
@@ -144,16 +159,18 @@ fun SquadTab(ctx: GroupContext, onTimetable: () -> Unit) {
     val vm = gngViewModel(key = "squad-${ctx.group.id}") { SquadViewModel(it, ctx) }
     val sharing by vm.sharing.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    val dark = LocalIsDark.current
-    var pinDialog by remember { mutableStateOf(false) }
+    var pinSheet by remember { mutableStateOf(false) }
     var pendingMode by remember { mutableStateOf<Pair<SharingMode, Duration?>?>(null) }
+    MessageEffect(vm.error, vm::dismissError)
+    MessageEffect(vm.message, vm::dismissMessage)
 
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
         val ok = granted.values.any { it }
-        pendingMode?.let { (mode, dur) -> if (ok) vm.setMode(mode, dur) else vm.message = "No permission, no check-ins 🤷" }
+        pendingMode?.let { (mode, dur) -> if (ok) vm.setMode(mode, dur) else vm.denyPermission() }
         pendingMode = null
     }
-    fun choose(mode: SharingMode, dur: Duration? = null) {
+    fun choose(mode: SharingMode) {
+        val dur = if (mode == SharingMode.Live) Duration.ofHours(1) else null
         if (mode == SharingMode.Off || context.container.checkIn.hasPermission()) {
             vm.setMode(mode, dur)
         } else {
@@ -162,129 +179,247 @@ fun SquadTab(ctx: GroupContext, onTimetable: () -> Unit) {
         }
     }
 
-    val now = Instant.now()
-    val nowIst = LocalDateTime.now(IST)
-    val birthdayToday = vm.birthdays.firstOrNull { it.isToday }
+    SquadContent(
+        ctx = ctx, presence = vm.presence, classes = vm.classes, sharing = sharing, myLatLng = vm.myLatLng,
+        birthdays = vm.birthdays,
+        onMode = ::choose, onCheckIn = vm::checkInNow, onPin = { pinSheet = true },
+        onLocationSettings = {
+            context.startActivity(
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)),
+            )
+        },
+        onFind = { p, who ->
+            val uri = Uri.parse("geo:${p.lat},${p.lng}?q=${p.lat},${p.lng}(${Uri.encode(who)})")
+            context.startActivity(Intent(Intent.ACTION_VIEW, uri))
+        },
+    )
 
-    Box(Modifier.fillMaxSize()) {
-        LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-            item {
-                ErrorBanner(vm.error, Modifier.padding(top = 8.dp))
-                birthdayToday?.let {
-                    FunCard(color = MaterialTheme.colorScheme.secondaryContainer) {
-                        Text(Birthdays.label(it) + " Go wish them 🥳", style = MaterialTheme.typography.titleMedium)
-                    }
-                }
-                SectionHeader("Your spot")
-                FunCard {
-                    Column {
-                        val effective = sharing.effective(now)
-                        ChipRow {
-                            FilterChip(effective == SharingMode.Off, { choose(SharingMode.Off) }, label = { Text("👻 Ghost") })
-                            FilterChip(effective == SharingMode.Zone, { choose(SharingMode.Zone) }, label = { Text("🏫 Spot only") })
-                            FilterChip(effective == SharingMode.Live, { choose(SharingMode.Live, Duration.ofHours(1)) }, label = { Text("📡 Live 1h") })
-                        }
-                        Text(
-                            when (effective) {
-                                SharingMode.Off -> "Invisible. Nobody sees where you are."
-                                SharingMode.Zone -> "The gang sees which spot you're at (Library, Mic Mac…), never your exact location."
-                                SharingMode.Live -> "Exact location shared until ${sharing.liveUntil?.atZone(IST)?.toLocalTime()?.hhmm()}, then back to spot only."
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(vertical = 8.dp),
-                        )
-                        if (effective != SharingMode.Off) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                BouncyButton("📍 Check in", vm::checkInNow)
-                                BouncyButton(
-                                    "📌 Pin this spot", { pinDialog = true },
-                                    container = MaterialTheme.colorScheme.tertiary,
-                                    content = MaterialTheme.colorScheme.onTertiary,
-                                )
-                            }
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                TextButton(onClick = {
-                                    context.startActivity(
-                                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)),
-                                    )
-                                }) { Text("Auto check-in when the app is closed: set location to \"Allow all the time\"") }
-                            }
-                        }
-                        vm.message?.let { Text(it, color = MaterialTheme.colorScheme.tertiary) }
-                    }
-                }
-                SectionHeader("The gang") {
-                    TextButton(onClick = onTimetable) { Text("🗓️ my classes") }
-                }
-            }
-            items(ctx.members.values.sortedBy { it.displayName.lowercase() }, key = { it.id }) { p ->
-                val pr = vm.presence[p.id]
-                val classStatus = vm.classes[p.id]?.let { Timetable.label(Timetable.status(it, nowIst)) }
-                Row(Modifier.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    EmojiAvatar(p.emoji, friendColor(p.id, dark))
-                    Column(Modifier.padding(start = 12.dp).weight(1f)) {
-                        Text(
-                            p.displayName + if (p.id == ctx.me.id) " (you)" else "",
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                        p.statusText?.let { Text("“$it”", style = MaterialTheme.typography.bodySmall) }
-                        Text(
-                            pr?.let { PresenceText.label(it.zoneName, it.zoneEmoji, parseInstant(it.updatedAt), now) } ?: "👻 not sharing",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        classStatus?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
-                    }
-                    if (pr?.lat != null && pr.lng != null && p.id != ctx.me.id) {
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text("📡 live", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
-                            vm.myLatLng?.let { me ->
-                                Text(Geo.prettyDistance(Geo.distanceMeters(me, LatLng(pr.lat, pr.lng))), style = MaterialTheme.typography.labelSmall)
-                            }
-                            TextButton(onClick = {
-                                val uri = Uri.parse("geo:${pr.lat},${pr.lng}?q=${pr.lat},${pr.lng}(${Uri.encode(p.displayName)})")
-                                context.startActivity(Intent(Intent.ACTION_VIEW, uri))
-                            }) { Text("Find 🗺️") }
-                        }
-                    }
-                }
-            }
-            item {
-                SectionHeader("Birthdays coming up")
-                if (vm.birthdays.isEmpty()) {
-                    Text("No birthdays in the next 2 months (or nobody added theirs 👀)", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                vm.birthdays.forEach { Text(Birthdays.label(it), modifier = Modifier.padding(vertical = 4.dp), fontSize = 16.sp) }
-                Spacer(Modifier.height(24.dp))
-            }
-        }
-        if (birthdayToday != null) EmojiConfetti()
-    }
-
-    if (pinDialog) PinDialog(onDismiss = { pinDialog = false }) { name, emoji, radius ->
-        vm.pinHere(name, emoji, radius)
-        pinDialog = false
+    if (pinSheet) PinSpotSheet(onDismiss = { pinSheet = false }) { name, icon, radius ->
+        vm.pinHere(name, icon, radius)
+        pinSheet = false
     }
 }
 
 @Composable
-private fun PinDialog(onDismiss: () -> Unit, onPin: (String, String, Int) -> Unit) {
-    var name by remember { mutableStateOf("") }
-    var emoji by remember { mutableStateOf(ZONE_EMOJIS.first()) }
-    var radius by remember { mutableStateOf(60f) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Pin where you're standing") },
-        text = {
-            Column {
-                Text("Stand at the spot (Library, Mic Mac, your hostel…) and name it. Everyone's check-ins nearby will show this name.")
-                EmojiStrip(ZONE_EMOJIS, emoji) { emoji = it }
-                OutlinedTextField(name, { name = it.take(30) }, label = { Text("Name") }, placeholder = { Text("Central Library") }, singleLine = true)
-                Text("Size: ${radius.toInt()} m")
-                Slider(value = radius, onValueChange = { radius = it }, valueRange = 20f..300f)
+fun SquadContent(
+    ctx: GroupContext,
+    presence: Map<String, Presence>,
+    classes: Map<String, List<ClassSlot>>,
+    sharing: SharingState,
+    myLatLng: LatLng?,
+    birthdays: List<UpcomingBirthday>,
+    onMode: (SharingMode) -> Unit,
+    onCheckIn: () -> Unit,
+    onPin: () -> Unit,
+    onLocationSettings: () -> Unit,
+    onFind: (Presence, String) -> Unit,
+    now: Instant = Instant.now(),
+) {
+    val scheme = MaterialTheme.colorScheme
+    val nowIst = LocalDateTime.ofInstant(now, IST)
+    val birthdayToday = birthdays.firstOrNull { it.isToday }
+    val effective = sharing.effective(now)
+
+    Box(Modifier.fillMaxSize()) {
+        LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+            item {
+                if (birthdayToday != null) {
+                    Spacer(Modifier.height(12.dp))
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer),
+                        shape = MaterialTheme.shapes.large,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            TonalIcon(GngIcons.CakeFill, container = scheme.primary, content = scheme.onPrimary)
+                            Column(Modifier.padding(start = 14.dp)) {
+                                Text(
+                                    "${birthdayToday.birthday.name} turns ${birthdayToday.turning} today",
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                                Text("Go wish them.", style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                    }
+                }
+                SectionHeader("Your location")
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = scheme.surfaceContainer),
+                    shape = MaterialTheme.shapes.large,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(Modifier.padding(16.dp)) {
+                        SegmentedChoice(
+                            choices = listOf(
+                                Choice(SharingMode.Off, "Ghost", GngIcons.VisibilityOff),
+                                Choice(SharingMode.Zone, "Spot", GngIcons.LocationOn),
+                                Choice(SharingMode.Live, "Live", GngIcons.Sensors),
+                            ),
+                            selected = effective, onSelect = onMode, checkIcon = GngIcons.Check,
+                        )
+                        Text(
+                            when (effective) {
+                                SharingMode.Off -> "Invisible. Nobody can see where you are."
+                                SharingMode.Zone -> "The gang sees which spot you're at, like the Library or Mic Mac. Never your exact location."
+                                SharingMode.Live -> "Exact location shared until ${sharing.liveUntil?.atZone(IST)?.toLocalTime()?.hhmm()}, then back to spot only."
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = scheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 12.dp),
+                        )
+                        if (effective != SharingMode.Off) {
+                            Row(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                FilledTonalButton(onClick = onCheckIn) {
+                                    GngIcon(GngIcons.MyLocation, null, size = 18.dp)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Check in")
+                                }
+                                OutlinedButton(onClick = onPin) {
+                                    GngIcon(GngIcons.PushPin, null, size = 18.dp)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Pin this spot")
+                                }
+                            }
+                            TextButton(onClick = onLocationSettings, modifier = Modifier.padding(top = 4.dp)) {
+                                Text("Check in while closed: allow location all the time")
+                            }
+                        }
+                    }
+                }
+                SectionHeader("The gang")
             }
-        },
-        confirmButton = { TextButton(enabled = name.isNotBlank(), onClick = { onPin(name.trim(), emoji, radius.toInt()) }) { Text("Pin it") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
+            items(ctx.members.values.sortedBy { it.displayName.lowercase() }, key = { it.id }) { p ->
+                MemberRow(
+                    name = p.displayName, photoUrl = p.avatarUrl, id = p.id, status = p.statusText,
+                    isMe = p.id == ctx.me.id,
+                    presence = presence[p.id],
+                    classStatus = classes[p.id]?.let { Timetable.status(it, nowIst) },
+                    myLatLng = myLatLng, now = now, onFind = onFind,
+                )
+            }
+            item {
+                SectionHeader("Birthdays")
+                if (birthdays.isEmpty()) {
+                    Text(
+                        "No birthdays in the next two months, or nobody's added theirs yet.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = scheme.onSurfaceVariant,
+                    )
+                }
+                birthdays.forEach { b ->
+                    Row(Modifier.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        TonalIcon(
+                            if (b.isToday) GngIcons.CakeFill else GngIcons.Cake,
+                            container = if (b.isToday) scheme.primaryContainer else scheme.secondaryContainer,
+                            content = if (b.isToday) scheme.onPrimaryContainer else scheme.onSecondaryContainer,
+                        )
+                        Column(Modifier.padding(horizontal = 14.dp).weight(1f)) {
+                            Text(b.birthday.name, style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                "${b.next.format(BIRTHDAY_DATE)} · turns ${b.turning}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = scheme.onSurfaceVariant,
+                            )
+                        }
+                        Text(
+                            Birthdays.whenLabel(b),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (b.isToday) scheme.primary else scheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(24.dp))
+            }
+        }
+        if (birthdayToday != null) Confetti()
+    }
+}
+
+@Composable
+private fun MemberRow(
+    name: String, photoUrl: String?, id: String, status: String?, isMe: Boolean,
+    presence: Presence?, classStatus: ClassStatus?, myLatLng: LatLng?, now: Instant,
+    onFind: (Presence, String) -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    val info = presence?.let { PresenceLogic.describe(it.zoneName, parseInstant(it.updatedAt), now) }
+    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.Top) {
+        StatusAvatar(name, photoUrl, online = info != null && !info.stale, colorKey = id)
+        Column(Modifier.padding(horizontal = 14.dp).weight(1f)) {
+            Text(name + if (isMe) " (you)" else "", style = MaterialTheme.typography.titleMedium)
+            if (!status.isNullOrBlank()) {
+                Text(status, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
+            }
+            Spacer(Modifier.height(4.dp))
+            if (info != null) {
+                val spot = info.spotName ?: "somewhere on the move"
+                StatusLine(
+                    GngIcons.LocationOn,
+                    (if (info.stale) "Last seen at $spot" else "At $spot") + " · ${info.ago}",
+                )
+            } else {
+                StatusLine(GngIcons.VisibilityOff, "Not sharing")
+            }
+            when (classStatus) {
+                is ClassStatus.InClass ->
+                    StatusLine(GngIcons.School, "In ${classStatus.slot.subject} until ${classStatus.slot.end.hhmm()}", scheme.primary)
+                is ClassStatus.Free ->
+                    StatusLine(GngIcons.CheckCircleFill, "Free until ${classStatus.nextClass.start.hhmm()}", scheme.tertiary)
+                ClassStatus.DoneForToday ->
+                    StatusLine(GngIcons.DoneAll, "Done for today", scheme.tertiary)
+                null -> Unit
+            }
+        }
+        if (presence?.lat != null && presence.lng != null && !isMe) {
+            Column(horizontalAlignment = Alignment.End) {
+                FilledTonalIconButton(onClick = { onFind(presence, name) }) { GngIcon(GngIcons.NearMe, "Find $name") }
+                myLatLng?.let {
+                    Text(
+                        Geo.prettyDistance(Geo.distanceMeters(it, LatLng(presence.lat, presence.lng))),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = scheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatusLine(icon: Int, text: String, tint: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurfaceVariant) {
+    Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        GngIcon(icon, null, tint = tint, size = 16.dp)
+        Spacer(Modifier.width(6.dp))
+        Text(text, style = MaterialTheme.typography.bodySmall, color = tint)
+    }
+}
+
+@Composable
+fun PinSpotSheet(onDismiss: () -> Unit, onPin: (name: String, icon: String, radius: Int) -> Unit) {
+    var name by remember { mutableStateOf("") }
+    var icon by remember { mutableStateOf(ZoneIcons.default.key) }
+    var radius by remember { mutableStateOf(60f) }
+    GngSheet(title = "Pin where you're standing", onDismiss = onDismiss) {
+        Text(
+            "Stand at the spot (Library, Mic Mac, your hostel) and name it. Everyone's check-ins nearby will show this name.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(16.dp))
+        IconPicker(ZoneIcons, icon) { icon = it }
+        Spacer(Modifier.height(16.dp))
+        OutlinedTextField(
+            name, { name = it.take(30) }, label = { Text("Name") }, placeholder = { Text("Central Library") },
+            singleLine = true, modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(12.dp))
+        Text("Size: ${radius.toInt()} m", style = MaterialTheme.typography.labelLarge)
+        Slider(value = radius, onValueChange = { radius = it }, valueRange = 20f..300f)
+        Spacer(Modifier.height(12.dp))
+        Button(
+            enabled = name.isNotBlank(),
+            onClick = { onPin(name.trim(), icon, radius.toInt()) },
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+        ) { Text("Pin it") }
+    }
 }

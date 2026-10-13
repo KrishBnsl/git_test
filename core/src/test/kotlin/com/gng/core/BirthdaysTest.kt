@@ -32,6 +32,7 @@ class BirthdaysTest {
         assertEquals(listOf("b", "a"), up.map { it.birthday.userId })
         assertEquals(true, up[0].isToday)
         assertEquals(20, up[0].turning)
-        assertEquals("🎂 Bhavya turns 20 TODAY!", Birthdays.label(up[0]))
+        assertEquals("Today", Birthdays.whenLabel(up[0]))
+        assertEquals("in 19 days", Birthdays.whenLabel(up[1]))
     }
 }

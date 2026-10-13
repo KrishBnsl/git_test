@@ -1,11 +1,7 @@
 package com.gng.app.ui.components
 
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
+import androidx.annotation.DrawableRes
 import androidx.compose.foundation.background
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,187 +9,308 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.Canvas
-import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.text.TextMeasurer
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.drawText
-import androidx.compose.ui.text.rememberTextMeasurer
-import kotlin.random.Random
+import coil3.compose.AsyncImage
+import com.gng.app.ui.theme.avatarColors
+import com.gng.app.ui.theme.pickAvatarColor
+
+// ---------------------------------------------------------------------------------------------
+// Icons
+// ---------------------------------------------------------------------------------------------
 
 @Composable
-fun EmojiAvatar(emoji: String, background: Color, size: Dp = 44.dp) {
+fun GngIcon(
+    @DrawableRes id: Int,
+    contentDescription: String?,
+    modifier: Modifier = Modifier,
+    tint: Color = LocalContentColor.current,
+    size: Dp = 24.dp,
+) {
+    Icon(painterResource(id), contentDescription, modifier.size(size), tint)
+}
+
+/** An icon on a tonal shape: the building block for list leading content and quick actions. */
+@Composable
+fun TonalIcon(
+    @DrawableRes icon: Int,
+    modifier: Modifier = Modifier,
+    container: Color = MaterialTheme.colorScheme.secondaryContainer,
+    content: Color = MaterialTheme.colorScheme.onSecondaryContainer,
+    size: Dp = 44.dp,
+    shape: Shape = CircleShape,
+) {
     Box(
-        Modifier.size(size).clip(CircleShape).background(background),
+        modifier.size(size).clip(shape).background(container),
         contentAlignment = Alignment.Center,
     ) {
-        Text(emoji, fontSize = (size.value * 0.5f).sp)
+        GngIcon(icon, null, tint = content, size = size * 0.5f)
     }
 }
 
-/** A button that squishes when pressed. Small thing, big vibe. */
+// ---------------------------------------------------------------------------------------------
+// Avatars
+// ---------------------------------------------------------------------------------------------
+
+/** A person's avatar: their photo if they have one, otherwise initials on a stable tonal colour. */
 @Composable
-fun BouncyButton(
-    text: String,
-    onClick: () -> Unit,
+fun Avatar(
+    name: String,
+    photoUrl: String?,
     modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-    container: Color = MaterialTheme.colorScheme.primary,
-    content: Color = MaterialTheme.colorScheme.onPrimary,
+    size: Dp = 40.dp,
+    colorKey: String = name,
 ) {
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        if (pressed) 0.92f else 1f,
-        spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
-        label = "bounce",
-    )
-    Button(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = modifier.scale(scale),
-        interactionSource = interaction,
-        colors = ButtonDefaults.buttonColors(containerColor = container, contentColor = content),
-    ) { Text(text) }
+    val scheme = MaterialTheme.colorScheme
+    val palette = remember(scheme) { avatarColors(scheme) }
+    val color = pickAvatarColor(palette, colorKey)
+    Box(
+        modifier.size(size).clip(CircleShape).background(color.container),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            initialsOf(name),
+            color = color.content,
+            fontSize = (size.value * 0.38f).sp,
+            style = MaterialTheme.typography.titleMedium,
+        )
+        if (!photoUrl.isNullOrBlank()) {
+            AsyncImage(
+                model = photoUrl,
+                contentDescription = name,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    }
 }
 
+fun initialsOf(name: String): String =
+    name.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.take(2)
+        .joinToString("") { it.first().uppercase() }
+        .ifEmpty { "?" }
+
+/** An avatar with a small status dot at the bottom-end corner. */
 @Composable
-fun SectionHeader(title: String, modifier: Modifier = Modifier, trailing: @Composable () -> Unit = {}) {
+fun StatusAvatar(
+    name: String,
+    photoUrl: String?,
+    online: Boolean,
+    modifier: Modifier = Modifier,
+    size: Dp = 48.dp,
+    colorKey: String = name,
+) {
+    Box(modifier) {
+        Avatar(name, photoUrl, size = size, colorKey = colorKey)
+        if (online) {
+            Box(
+                Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(size * 0.3f)
+                    .background(MaterialTheme.colorScheme.surface, CircleShape)
+                    .padding(2.dp)
+                    .background(MaterialTheme.colorScheme.tertiary, CircleShape),
+            )
+        }
+    }
+}
+
+data class AvatarInfo(val key: String, val name: String, val photoUrl: String?)
+
+/** Overlapping avatars, with a "+N" bubble when there are more than [max]. */
+@Composable
+fun AvatarStack(
+    people: List<AvatarInfo>,
+    modifier: Modifier = Modifier,
+    max: Int = 4,
+    size: Dp = 28.dp,
+    ringColor: Color = MaterialTheme.colorScheme.surfaceContainerLow,
+) {
+    val shown = people.take(max)
+    val extra = people.size - shown.size
+    val ring = 2.dp
+    val full = size + ring * 2
+    val step = size * 0.7f + ring // how far each avatar is shifted from the previous one
+    val count = shown.size + if (extra > 0) 1 else 0
+    Box(modifier.width(full + step * (count - 1).coerceAtLeast(0)).height(full)) {
+        shown.forEachIndexed { i, p ->
+            Box(
+                Modifier.offset(x = step * i).background(ringColor, CircleShape).padding(ring),
+            ) { Avatar(p.name, p.photoUrl, size = size, colorKey = p.key) }
+        }
+        if (extra > 0) {
+            Box(
+                Modifier
+                    .offset(x = step * shown.size)
+                    .background(ringColor, CircleShape)
+                    .padding(ring)
+                    .size(size)
+                    .background(MaterialTheme.colorScheme.surfaceContainerHighest, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("+$extra", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Layout pieces
+// ---------------------------------------------------------------------------------------------
+
+@Composable
+fun SectionHeader(
+    title: String,
+    modifier: Modifier = Modifier,
+    action: (@Composable () -> Unit)? = null,
+) {
     Row(
-        modifier.fillMaxWidth().padding(top = 20.dp, bottom = 8.dp),
+        modifier.fillMaxWidth().padding(top = 24.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-        trailing()
+        action?.invoke()
     }
 }
 
 @Composable
-fun FunCard(
+fun EmptyState(
+    @DrawableRes icon: Int,
+    title: String,
+    body: String,
     modifier: Modifier = Modifier,
-    color: Color = MaterialTheme.colorScheme.surfaceContainerHigh,
-    content: @Composable () -> Unit,
+    action: (@Composable () -> Unit)? = null,
 ) {
-    Card(
-        modifier = modifier.fillMaxWidth().padding(vertical = 4.dp),
-        colors = CardDefaults.cardColors(containerColor = color),
-        shape = MaterialTheme.shapes.medium,
-    ) { Box(Modifier.padding(16.dp)) { content() } }
-}
-
-@Composable
-fun EmptyState(emoji: String, title: String, subtitle: String, modifier: Modifier = Modifier) {
     Column(
-        modifier.fillMaxWidth().padding(32.dp),
+        modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(emoji, fontSize = 56.sp)
-        Spacer(Modifier.size(8.dp))
-        Text(title, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+        TonalIcon(
+            icon, size = 88.dp,
+            container = MaterialTheme.colorScheme.primaryContainer,
+            content = MaterialTheme.colorScheme.onPrimaryContainer,
+        )
+        Spacer(Modifier.height(20.dp))
+        Text(title, style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
+        Spacer(Modifier.height(6.dp))
         Text(
-            subtitle,
+            body,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
+        if (action != null) {
+            Spacer(Modifier.height(20.dp))
+            action()
+        }
     }
 }
 
 @Composable
-fun Loading() {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+fun Loading(modifier: Modifier = Modifier) {
+    Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
 }
 
+/** A small rounded label, used for times, places, counts and urgency. */
 @Composable
-fun ErrorBanner(message: String?, modifier: Modifier = Modifier) {
-    if (message == null) return
-    Text(
-        "😵 $message",
-        color = MaterialTheme.colorScheme.onErrorContainer,
-        modifier = modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.errorContainer, MaterialTheme.shapes.small)
-            .padding(12.dp),
-    )
-}
-
-@Composable
-fun RowGap(width: Dp = 8.dp) = Spacer(Modifier.width(width))
-
-@Composable
-fun ChipRow(content: @Composable () -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        content()
-    }
-}
-
-private class Particle(var x: Float, var y: Float, val vx: Float, var vy: Float, var rot: Float, val spin: Float, val emoji: String)
-
-/** Emoji confetti that rains down for a few seconds. Used on birthdays. */
-@Composable
-fun EmojiConfetti(
-    emojis: List<String> = listOf("🎉", "🎂", "🎈", "✨", "🥳"),
-    modifier: Modifier = Modifier.fillMaxSize(),
+fun InfoChip(
+    text: String,
+    modifier: Modifier = Modifier,
+    @DrawableRes icon: Int? = null,
+    container: Color = MaterialTheme.colorScheme.surfaceContainerHighest,
+    content: Color = MaterialTheme.colorScheme.onSurfaceVariant,
 ) {
-    val particles = remember { mutableStateListOf<Particle>() }
-    val measurer: TextMeasurer = rememberTextMeasurer()
-    var tick by remember { androidx.compose.runtime.mutableLongStateOf(0L) }
-    LaunchedEffect(Unit) {
-        repeat(40) {
-            particles += Particle(
-                x = Random.nextFloat(), y = -Random.nextFloat() * 0.5f,
-                vx = (Random.nextFloat() - 0.5f) * 0.002f, vy = 0.004f + Random.nextFloat() * 0.006f,
-                rot = Random.nextFloat() * 360f, spin = (Random.nextFloat() - 0.5f) * 8f,
-                emoji = emojis.random(),
+    Row(
+        modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(container)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (icon != null) GngIcon(icon, null, tint = content, size = 16.dp)
+        Text(text, style = MaterialTheme.typography.labelMedium, color = content)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Controls
+// ---------------------------------------------------------------------------------------------
+
+data class Choice<T>(val value: T, val label: String, @DrawableRes val icon: Int? = null)
+
+/** A Material 3 single-choice segmented button row. The selected segment shows a check. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun <T> SegmentedChoice(
+    choices: List<Choice<T>>,
+    selected: T,
+    onSelect: (T) -> Unit,
+    modifier: Modifier = Modifier,
+    @DrawableRes checkIcon: Int,
+) {
+    SingleChoiceSegmentedButtonRow(modifier.fillMaxWidth()) {
+        choices.forEachIndexed { index, choice ->
+            val isSelected = choice.value == selected
+            SegmentedButton(
+                selected = isSelected,
+                onClick = { onSelect(choice.value) },
+                shape = SegmentedButtonDefaults.itemShape(index, choices.size),
+                icon = {
+                    val icon = if (isSelected) checkIcon else choice.icon
+                    if (icon != null) GngIcon(icon, null, size = SegmentedButtonDefaults.IconSize)
+                },
+                label = { Text(choice.label, maxLines = 1) },
             )
         }
-        val start = withFrameNanos { it }
-        while (true) {
-            val now = withFrameNanos { it }
-            particles.forEach { p ->
-                p.x += p.vx; p.y += p.vy; p.vy += 0.00008f; p.rot += p.spin
-            }
-            tick = now
-            if (now - start > 6_000_000_000L) {
-                particles.clear()
-                break
-            }
-        }
     }
-    Canvas(modifier) {
-        if (tick < 0) return@Canvas // reading tick makes the canvas redraw every frame
-        particles.forEach { p ->
-            val pos = androidx.compose.ui.geometry.Offset(p.x * size.width, p.y * size.height)
-            rotate(p.rot, pos) {
-                drawText(measurer, p.emoji, topLeft = pos, style = TextStyle(fontSize = 26.sp))
-            }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------------------------
+
+/** Provided by the screen scaffold so any child can surface a message. */
+val LocalSnackbar = compositionLocalOf<SnackbarHostState> { error("No SnackbarHostState provided") }
+
+/** Shows [message] in the scaffold's snackbar, then calls [onShown] so the view model can clear it. */
+@Composable
+fun MessageEffect(message: String?, onShown: () -> Unit) {
+    val host = LocalSnackbar.current
+    LaunchedEffect(message) {
+        if (message != null) {
+            host.showSnackbar(message)
+            onShown()
         }
     }
 }

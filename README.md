@@ -1,19 +1,35 @@
-# gng 🫶
+# gng
 
 A private hangout app for our DTU friend group. It's like Discord, but it knows where lunch is.
 
-- 💬 **Hangout**: realtime group chat with emoji reactions
-- 🍛 **Plans**: one-tap lunch requests, snacks runs, outings, study sessions with RSVPs; a "when is everyone free" finder built from everyone's timetable; a daily lunch board
-- 📍 **Squad**: who's at the Library / Mic Mac / hostel (spot-only or live for an hour, or go ghost), who's in class, upcoming birthdays with confetti
-- 📚 **Study**: midsem/endsem radar with a panic meter, and a shared stack of notes, PYQs and links
+- **Chat**: realtime group chat with reactions, grouped bubbles, and plans, exams and notes that post themselves
+- **Plans**: one-tap lunch requests, snacks runs, outings, study sessions with RSVPs; a "when is everyone free" finder built from everyone's timetable; a daily lunch board
+- **Squad**: who's at the Library / Mic Mac / hostel (spot-only or live for an hour, or go ghost), who's in class, upcoming birthdays with confetti
+- **Study**: midsem/endsem radar with a panic meter, and a shared stack of notes, PYQs and links
 
-Android (Kotlin + Jetpack Compose) on a Supabase backend. Multiple gangs, invite codes, light and neon-dark themes.
+Android (Kotlin + Jetpack Compose) on a Supabase backend. Multiple gangs, invite codes, profile photos, and a **Material You** design that takes its colours from your wallpaper (or a pink-and-teal brand palette), with light and dark themes.
+
+<p>
+  <img src="docs/screenshots/chat-light.png" width="19%" />
+  <img src="docs/screenshots/plans-light.png" width="19%" />
+  <img src="docs/screenshots/squad-light.png" width="19%" />
+  <img src="docs/screenshots/study-light.png" width="19%" />
+  <img src="docs/screenshots/chat-light-dyn.png" width="19%" />
+</p>
+<p>
+  <img src="docs/screenshots/groups-light.png" width="19%" />
+  <img src="docs/screenshots/chat-dark.png" width="19%" />
+  <img src="docs/screenshots/squad-dark.png" width="19%" />
+  <img src="docs/screenshots/profile-new-light.png" width="19%" />
+</p>
 
 - **Set it up:** [docs/SETUP.md](docs/SETUP.md)
+- **Design system:** [docs/DESIGN.md](docs/DESIGN.md)
 - **Product & tech plan, roadmap:** [docs/PLAN.md](docs/PLAN.md)
 
 ```
 app/        Android app (Compose UI, Supabase repositories, location check-ins)
 core/       Pure Kotlin logic with unit tests (zones, timetables, birthdays, exams)
-supabase/   Database schema, security policies, RPCs, triggers
+supabase/   Database schema, security policies, RPCs, triggers (migrations 0001, 0002)
+tools/      Icon and palette generators for the design system
 ```

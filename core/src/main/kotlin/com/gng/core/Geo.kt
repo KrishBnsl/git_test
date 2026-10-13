@@ -11,7 +11,7 @@ data class LatLng(val lat: Double, val lng: Double)
 data class CampusZone(
     val id: String,
     val name: String,
-    val emoji: String,
+    val icon: String,
     val center: LatLng,
     val radiusMeters: Int,
 )

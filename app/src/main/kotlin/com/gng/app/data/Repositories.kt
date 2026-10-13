@@ -23,8 +23,6 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.time.Instant
@@ -67,27 +65,40 @@ class ProfileRepository(private val client: SupabaseClient) {
         client.from("profiles").select { filter { eq("id", id) } }.decodeSingleOrNull()
 
     suspend fun save(profile: Profile) {
-        client.from("profiles").upsert(profile)
+        // Built by hand so cleared fields are sent as explicit nulls and actually clear the column.
+        val row = buildJsonObject {
+            put("id", profile.id)
+            put("display_name", profile.displayName)
+            put("avatar_url", profile.avatarUrl)
+            put("branch", profile.branch)
+            put("year", profile.year)
+            put("birthday", profile.birthday)
+            put("status_text", profile.statusText)
+        }
+        client.from("profiles").upsert(row)
+    }
+
+    /** Uploads a square JPEG and returns its public URL. Each upload gets a fresh path, so caches never go stale. */
+    suspend fun uploadAvatar(userId: String, jpeg: ByteArray): String {
+        val path = "$userId/${UUID.randomUUID()}.jpg"
+        val bucket = client.storage.from("avatars")
+        bucket.upload(path, jpeg)
+        return bucket.publicUrl(path)
     }
 }
 
 class GroupRepository(private val client: SupabaseClient) {
-    suspend fun myGroups(userId: String): List<Group> {
-        val ids = client.from("group_members")
-            .select(Columns.list("group_id")) { filter { eq("user_id", userId) } }
-            .decodeList<GroupIdRow>()
-            .map { it.groupId }
-        if (ids.isEmpty()) return emptyList()
-        return client.from("groups").select { filter { isIn("id", ids) } }.decodeList()
-    }
+    /** Row-level security only lets you see your own gangs, so no filter is needed. */
+    suspend fun myGroups(): List<Group> =
+        client.from("groups").select(Columns.raw("*, group_members(count)")).decodeList()
 
     suspend fun get(id: String): Group =
-        client.from("groups").select { filter { eq("id", id) } }.decodeSingle()
+        client.from("groups").select(Columns.raw("*, group_members(count)")) { filter { eq("id", id) } }.decodeSingle()
 
-    suspend fun create(name: String, emoji: String): Group =
+    suspend fun create(name: String, icon: String): Group =
         client.postgrest.rpc("create_group", buildJsonObject {
             put("p_name", name)
-            put("p_emoji", emoji)
+            put("p_emoji", icon)
         }).decodeAs()
 
     suspend fun join(code: String): Group =
@@ -107,8 +118,6 @@ class GroupRepository(private val client: SupabaseClient) {
         }
     }
 
-    @Serializable
-    private data class GroupIdRow(@SerialName("group_id") val groupId: String)
 }
 
 class ChatRepository(private val client: SupabaseClient) {
@@ -179,8 +188,8 @@ class PlansRepository(private val client: SupabaseClient) {
     suspend fun lunchToday(): List<LunchLog> =
         client.from("lunch_logs").select { filter { eq("day", LocalDate.now(IST).toString()) } }.decodeList()
 
-    suspend fun logLunch(dish: String, place: String?, emoji: String) {
-        client.from("lunch_logs").upsert(NewLunchLog(LocalDate.now(IST).toString(), dish, place, emoji)) {
+    suspend fun logLunch(dish: String, place: String?, icon: String) {
+        client.from("lunch_logs").upsert(NewLunchLog(LocalDate.now(IST).toString(), dish, place, icon)) {
             onConflict = "user_id,day"
         }
     }

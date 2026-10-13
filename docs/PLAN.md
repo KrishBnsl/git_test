@@ -94,6 +94,16 @@ Spots ("zones") are pinned by the gang itself: stand at the Library, tap **📌 
 - [x] Settings: light/dark/system theme, edit profile, log out
 - [x] CI: GitHub Actions runs core tests and builds a debug APK you can sideload
 
+## 5b. Design refresh
+
+The MVP's emoji-driven look was replaced with a proper **Material You (Material 3)** design. See [DESIGN.md](DESIGN.md).
+
+- Dynamic colour from the wallpaper on Android 12+, with a pink-and-teal brand palette as the fallback
+- Plus Jakarta Sans typography, rounder shapes, Material Symbols Rounded icons instead of emoji
+- Profile photos (initials as the fallback), icon pickers for gangs, spots and meals
+- Reworked Chat, Plans, Squad, Study, onboarding and settings, with bottom sheets for create flows
+- Debug-only screen gallery with sample data for design review
+
 ## 6. Roadmap
 
 **Phase 2: make it sticky**
