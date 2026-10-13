@@ -8,10 +8,10 @@ class ReleaseNotesTest {
     fun cleansGitHubGeneratedNotes() {
         val body = """
             ## What's Changed
-            * Make migration 0002 safe to re-run by @KrishBnsl in https://github.com/KrishBnsl/git_test/pull/3
-            * Add a live map and **group settings** by @KrishBnsl in https://github.com/KrishBnsl/git_test/pull/4
+            * Make migration 0002 safe to re-run by @KrishBnsl in https://github.com/KrishBnsl/gng/pull/3
+            * Add a live map and **group settings** by @KrishBnsl in https://github.com/KrishBnsl/gng/pull/4
 
-            **Full Changelog**: https://github.com/KrishBnsl/git_test/compare/v0.2.0...v0.2.1
+            **Full Changelog**: https://github.com/KrishBnsl/gng/compare/v0.2.0...v0.2.1
         """.trimIndent()
         assertEquals(
             listOf("Make migration 0002 safe to re-run", "Add a live map and group settings"),
