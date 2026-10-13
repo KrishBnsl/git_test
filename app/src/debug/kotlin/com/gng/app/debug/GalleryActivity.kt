@@ -83,7 +83,7 @@ private val noop = {}
 private val sampleUpdate = UpdateInfo(
     version = "0.3.0",
     notes = listOf("Live map with everyone's avatars", "Group settings and admin permissions", "Direct messages", "Updates inside the app", "Fixes and polish"),
-    apkUrl = "https://github.com/KrishBnsl/git_test/releases/download/v0.3.0/gng-0.3.0.apk",
+    apkUrl = "https://github.com/KrishBnsl/gng/releases/download/v0.3.0/gng-0.3.0.apk",
     sizeBytes = 12_900_000,
 )
 

@@ -30,7 +30,7 @@ android {
         // local.properties (UPDATE_API_URL) to test the updater against a local server.
         buildConfigField(
             "String", "UPDATE_API_URL",
-            "\"${secret("UPDATE_API_URL").ifBlank { "https://api.github.com/repos/KrishBnsl/git_test/releases/latest" }}\"",
+            "\"${secret("UPDATE_API_URL").ifBlank { "https://api.github.com/repos/KrishBnsl/gng/releases/latest" }}\"",
         )
         buildConfigField("String", "SUPABASE_URL", "\"${secret("SUPABASE_URL")}\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"${secret("SUPABASE_ANON_KEY")}\"")
