@@ -1,5 +1,5 @@
 -- gng 0002: profile photos, icon keys instead of emoji, plain-text chat events.
--- Run once in the Supabase SQL editor, after 0001_init.sql.
+-- Run in the Supabase SQL editor, after 0001_init.sql. Safe to run more than once.
 
 ------------------------------------------------------------------------------
 -- Profile photos
@@ -13,12 +13,16 @@ insert into storage.buckets (id, name, public) values ('avatars', 'avatars', tru
 on conflict (id) do nothing;
 
 -- Reading is open through the public URL; this select policy only lets the uploader read back their own rows.
+drop policy if exists "read own avatar rows" on storage.objects;
 create policy "read own avatar rows" on storage.objects for select
   using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+drop policy if exists "upload own avatar" on storage.objects;
 create policy "upload own avatar" on storage.objects for insert
   with check (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+drop policy if exists "replace own avatar" on storage.objects;
 create policy "replace own avatar" on storage.objects for update
   using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+drop policy if exists "delete own avatar" on storage.objects;
 create policy "delete own avatar" on storage.objects for delete
   using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
 
