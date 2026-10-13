@@ -15,6 +15,22 @@ import com.gng.app.data.SharingState
 import com.gng.app.data.ThemeMode
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.remember
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.gng.app.container
+import com.gng.app.ui.update.UpdateActions
+import com.gng.app.ui.update.UpdateCard
+import com.gng.app.ui.update.actions
+import com.gng.app.update.UpdateInfo
+import com.gng.app.update.UpdateState
+import java.io.File
 import com.gng.app.ui.auth.AuthContent
 import com.gng.app.ui.dm.DmChatContent
 import com.gng.app.ui.dm.DmInboxContent
@@ -64,6 +80,32 @@ class GalleryActivity : ComponentActivity() {
 
 private val noop = {}
 
+private val sampleUpdate = UpdateInfo(
+    version = "0.3.0",
+    notes = listOf("Live map with everyone's avatars", "Group settings and admin permissions", "Direct messages", "Updates inside the app", "Fixes and polish"),
+    apkUrl = "https://github.com/KrishBnsl/git_test/releases/download/v0.3.0/gng-0.3.0.apk",
+    sizeBytes = 12_900_000,
+)
+
+@Composable
+private fun UpdateDemo(state: UpdateState) {
+    Column(Modifier.systemBarsPadding().padding(16.dp)) { UpdateCard(state, UpdateActions()) }
+}
+
+/** Drives the real UpdateManager, for testing the updater against a local server. */
+@Composable
+private fun UpdateLive() {
+    val updates = LocalContext.current.container.updates
+    val state by updates.state.collectAsStateWithLifecycle()
+    Column(Modifier.systemBarsPadding().padding(16.dp), verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)) {
+        Text("Updater test", style = MaterialTheme.typography.headlineSmall)
+        Text("Installed: ${updates.currentVersion}   updates enabled: ${updates.enabled}")
+        Text("State: ${state::class.simpleName}")
+        Button(onClick = { updates.check() }) { Text("Check now") }
+        UpdateCard(state, updates.actions())
+    }
+}
+
 @Composable
 private fun MapScreen(selected: String?) {
     val s = SampleData
@@ -107,7 +149,10 @@ private fun Screen(name: String) {
             StudyContent(s.ctx, s.exams, s.materials, s.votes, null, {}, {}, {}, {}, {})
         }
         "timetable" -> TimetableContent(s.myClasses, null, {}, {}, {}, {}, DayOfWeek.of(java.time.LocalDate.now().dayOfWeek.value))
-        "settings" -> SettingsContent(s.me, ThemeMode.System, true, {}, {}, {}, {}, {}, {})
+        "settings" -> SettingsContent(
+            s.me, ThemeMode.System, true, {}, {}, {}, {}, {}, {},
+            updateState = UpdateState.Available(sampleUpdate), currentVersion = "0.2.1",
+        )
         "map" -> Group(GroupTab.Map) { MapScreen(selected = null) }
         "map-selected" -> Group(GroupTab.Map) { MapScreen(selected = "u-bhavya") }
         "map-empty" -> Group(GroupTab.Map) {
@@ -127,6 +172,11 @@ private fun Screen(name: String) {
             )
         }
         "sheet-new-message" -> NewMessageSheet(s.people.filter { it.id != s.me.id }, {}, {})
+        "update-available" -> UpdateDemo(UpdateState.Available(sampleUpdate))
+        "update-downloading" -> UpdateDemo(UpdateState.Downloading(sampleUpdate, 0.42f))
+        "update-permission" -> UpdateDemo(UpdateState.NeedsInstallPermission(sampleUpdate, File("x.apk")))
+        "update-failed" -> UpdateDemo(UpdateState.Failed("This update is signed with a different key than your installed app. Uninstall gng and install the new version once.", sampleUpdate))
+        "update-live" -> UpdateLive()
         "sheet-plan" -> NewPlanSheet(PlanKind.Lunch, "g1", {}, {})
         "sheet-lunch" -> LunchSheet({}, { _, _, _ -> })
         "sheet-gang" -> NewGangSheet(GangSheetMode.Start, false, null, {}, { _, _ -> }, {})

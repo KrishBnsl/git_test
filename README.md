@@ -4,6 +4,7 @@ A private hangout app for our DTU friend group. It's like Discord, but it knows 
 
 - **Chat**: realtime group chat with reactions, grouped bubbles, and plans, exams and notes that post themselves
 - **Plans**: one-tap lunch requests, snacks runs, outings, study sessions with RSVPs; a "when is everyone free" finder built from everyone's timetable; a daily lunch board
+- **Updates**: the app tells you when a new version is out and installs it in a couple of taps
 - **Messages**: one-to-one chats with anyone you share a gang with, with an inbox, unread badges and reactions
 - **Map**: everyone's avatar on a live campus map, Snap Map style (exact when they go Live, on their pinned spot when they share just the spot)
 - **Squad**: who's at the Library / Mic Mac / hostel (spot-only or live for an hour, or go ghost), who's in class, upcoming birthdays with confetti
@@ -33,6 +34,8 @@ Android (Kotlin + Jetpack Compose) on a Supabase backend. Multiple gangs with gr
 <p>
   <img src="docs/screenshots/dm-inbox-light.png" width="19%" />
   <img src="docs/screenshots/dm-chat-light.png" width="19%" />
+  <img src="docs/screenshots/update-available-light.png" width="19%" />
+  <img src="docs/screenshots/settings-light.png" width="19%" />
 </p>
 
 - **Set it up:** [docs/SETUP.md](docs/SETUP.md)

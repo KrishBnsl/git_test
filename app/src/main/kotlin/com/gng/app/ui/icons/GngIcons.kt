@@ -125,6 +125,11 @@ object GngIcons {
     @DrawableRes val ZoomOutMap = R.drawable.ic_zoom_out_map
     @DrawableRes val Directions = R.drawable.ic_directions
     @DrawableRes val ShieldPerson = R.drawable.ic_shield_person
+    @DrawableRes val SystemUpdate = R.drawable.ic_system_update
+    @DrawableRes val SystemUpdateFill = R.drawable.ic_system_update_fill
+    @DrawableRes val Download = R.drawable.ic_download
+    @DrawableRes val Update = R.drawable.ic_update
+    @DrawableRes val NewReleases = R.drawable.ic_new_releases
     @DrawableRes val NightShelter = R.drawable.ic_night_shelter
     @DrawableRes val Bolt = R.drawable.ic_bolt
     @DrawableRes val Star = R.drawable.ic_star

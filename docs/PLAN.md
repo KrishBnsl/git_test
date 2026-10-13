@@ -119,6 +119,10 @@ One-to-one chats between people who share a gang, reusing the gang chat's look.
 - **Privacy:** only the two people can read a conversation (database row-level security). Conversations are created through a function that checks you share a gang. **If you stop sharing any gang with someone, neither of you can send new messages**, but you both keep the history. Leaving a shared gang is the way to cut contact.
 - Gang-level "who can send messages" settings don't apply to DMs.
 
+## 5e. In-app updates
+
+Friends get gng from GitHub Releases, so the app updates itself from there (see [SETUP.md](SETUP.md#updates)): it finds the latest release through GitHub's public API, downloads the APK, verifies it, and hands it to Android's installer. Verification checks the package name, that the version is newer, and that the signing certificate matches the installed app. Android still shows its own "Update" confirmation; silent installs aren't possible outside the Play Store. Only `https://github.com/...` download links are trusted. Version comparison, and turning GitHub's generated release notes into bullets, are unit-tested in `core`.
+
 ## 6. Roadmap
 
 **Phase 2: make it sticky**
@@ -126,6 +130,7 @@ One-to-one chats between people who share a gang, reusing the gang chat's look.
 - Daily birthday post in chat (pg_cron)
 - Images in chat & lunch board photos
 - Push notifications (DMs and gang chat only show when the app is open for now)
+- Optional: Play Store distribution (internal testing track) for fully automatic background updates
 - Reply threads, mentions (@name), message delete/edit, block or mute someone in DMs, read receipts
 - Polls ("Domino's or Mic Mac?")
 

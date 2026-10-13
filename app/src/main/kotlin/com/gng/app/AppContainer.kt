@@ -13,6 +13,7 @@ import com.gng.app.data.StudyRepository
 import com.gng.app.data.Supabase
 import com.gng.app.data.TimetableRepository
 import com.gng.app.location.CheckIn
+import com.gng.app.update.UpdateManager
 
 /** Hand-rolled dependency container; small enough that a DI framework would be overkill. */
 class AppContainer(context: Context) {
@@ -28,5 +29,6 @@ class AppContainer(context: Context) {
     val timetable by lazy { TimetableRepository(client) }
     val locations by lazy { LocationRepository(client) }
     val study by lazy { StudyRepository(client) }
+    val updates by lazy { UpdateManager(context.applicationContext, settings) }
     val checkIn by lazy { CheckIn(context, settings, locations) }
 }

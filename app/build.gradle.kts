@@ -26,6 +26,12 @@ android {
         versionCode = secret("VERSION_CODE").toIntOrNull() ?: 1
         versionName = secret("VERSION_NAME").ifBlank { "0.1.0" }
 
+        // Where new versions are announced: the latest GitHub release of this repo. Override it in
+        // local.properties (UPDATE_API_URL) to test the updater against a local server.
+        buildConfigField(
+            "String", "UPDATE_API_URL",
+            "\"${secret("UPDATE_API_URL").ifBlank { "https://api.github.com/repos/KrishBnsl/git_test/releases/latest" }}\"",
+        )
         buildConfigField("String", "SUPABASE_URL", "\"${secret("SUPABASE_URL")}\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"${secret("SUPABASE_ANON_KEY")}\"")
     }
@@ -44,7 +50,13 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Debug builds are signed with a different key than releases, so they can't update from one.
+            // The updater is only on in debug when a test server is configured.
+            buildConfigField("boolean", "UPDATE_ENABLED", secret("UPDATE_API_URL").isNotBlank().toString())
+        }
         release {
+            buildConfigField("boolean", "UPDATE_ENABLED", "true")
             signingConfigs.findByName("release")?.let { signingConfig = it }
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

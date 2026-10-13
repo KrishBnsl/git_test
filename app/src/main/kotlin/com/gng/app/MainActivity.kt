@@ -16,6 +16,7 @@ class MainActivity : ComponentActivity() {
         installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        container.updates.checkIfDue()
         setContent {
             val theme by container.settings.theme.collectAsStateWithLifecycle(ThemeMode.System)
             val dynamic by container.settings.dynamicColor.collectAsStateWithLifecycle(true)

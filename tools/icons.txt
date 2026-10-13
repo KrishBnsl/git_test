@@ -127,6 +127,12 @@ zoom_out_map
 directions
 shield_person
 
+# updates
+system_update+
+download
+update
+new_releases
+
 # misc
 night_shelter
 bolt

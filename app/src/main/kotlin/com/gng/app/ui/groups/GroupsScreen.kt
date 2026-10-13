@@ -39,6 +39,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.gng.app.container
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -60,6 +63,10 @@ import com.gng.app.ui.friendly
 import com.gng.app.ui.gngViewModel
 import com.gng.app.ui.icons.GngIcons
 import com.gng.app.ui.icons.GroupIcons
+import com.gng.app.ui.update.UpdateActions
+import com.gng.app.ui.update.actions
+import com.gng.app.ui.update.UpdateCard
+import com.gng.app.update.UpdateState
 import com.gng.core.InviteCodes
 import kotlinx.coroutines.launch
 
@@ -106,7 +113,10 @@ fun GroupsScreen(me: Profile, unreadDms: Int, onOpen: (Group) -> Unit, onSetting
     LaunchedEffect(Unit) { vm.refresh() }
     var sheet by remember { mutableStateOf<GangSheetMode?>(null) }
 
+    val updates = LocalContext.current.container.updates
+    val updateState by updates.state.collectAsStateWithLifecycle()
     GroupsContent(
+        updateState = updateState, updateActions = updates.actions(),
         me = me, unreadDms = unreadDms, groups = vm.groups, refreshing = vm.refreshing, error = vm.error, onDismissError = vm::dismissError,
         onRefresh = { vm.refresh() }, onOpen = onOpen, onSettings = onSettings, onMessages = onMessages,
         onStart = { sheet = GangSheetMode.Start }, onJoin = { sheet = GangSheetMode.Join },
@@ -139,6 +149,8 @@ fun GroupsContent(
     onMessages: () -> Unit,
     onStart: () -> Unit,
     onJoin: () -> Unit,
+    updateState: UpdateState = UpdateState.Idle,
+    updateActions: UpdateActions = UpdateActions(),
 ) {
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val snackbar = remember { SnackbarHostState() }
@@ -177,7 +189,9 @@ fun GroupsContent(
             }
         },
     ) { padding ->
-        PullToRefreshBox(isRefreshing = refreshing, onRefresh = onRefresh, modifier = Modifier.padding(padding)) {
+        Column(Modifier.padding(padding)) {
+        UpdateCard(updateState, updateActions, Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+        PullToRefreshBox(isRefreshing = refreshing, onRefresh = onRefresh, modifier = Modifier.weight(1f)) {
             when {
                 groups == null -> Loading()
                 groups.isEmpty() -> Column(
@@ -211,6 +225,7 @@ fun GroupsContent(
                     }
                 }
             }
+        }
         }
     }
 }
