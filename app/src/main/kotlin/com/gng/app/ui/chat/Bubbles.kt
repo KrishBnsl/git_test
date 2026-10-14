@@ -9,7 +9,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -25,6 +24,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -40,27 +40,31 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.gng.app.data.ChatMessage
+import com.gng.app.data.IST
 import com.gng.app.data.MediaRef
 import com.gng.app.data.SendState
 import com.gng.app.data.decodeThumb
-import com.gng.app.ui.components.EmojiAvatar
+import com.gng.app.ui.components.Avatar
+import com.gng.app.ui.components.GngIcon
+import com.gng.app.ui.components.TonalIcon
 import com.gng.app.ui.group.GroupContext
-import com.gng.app.ui.theme.friendColor
+import com.gng.app.ui.icons.GngIcons
+import com.gng.app.ui.theme.avatarColors
+import com.gng.app.ui.theme.pickAvatarColor
 import kotlinx.coroutines.launch
 import java.io.File
-import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 
@@ -69,16 +73,21 @@ val TAPBACKS = listOf("❤️", "👍", "👎", "😂", "‼️", "❓", "🔥",
 
 private val TIME = DateTimeFormatter.ofPattern("h:mm a")
 
-/** How a row sits next to its neighbours: first/last of a run from the same person. */
+/** How a bubble sits next to its neighbours: first/last of a run from the same person. */
 data class RunPosition(val first: Boolean, val last: Boolean)
+
+/** Lets bubbles fetch attachments without knowing about the view model. */
+interface MediaAccess {
+    fun cached(ref: MediaRef): File?
+    suspend fun load(ref: MediaRef): File
+}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun MessageRow(
+fun MessageBubble(
     m: ChatMessage,
     ctx: GroupContext,
     mine: Boolean,
-    dark: Boolean,
     run: RunPosition,
     reactions: Map<String, String>,
     highlighted: Boolean,
@@ -92,6 +101,10 @@ fun MessageRow(
     onOpenFile: (MediaRef) -> Unit,
     onRetry: () -> Unit,
 ) {
+    val scheme = MaterialTheme.colorScheme
+    val palette = remember(scheme) { avatarColors(scheme) }
+    val oneToOne = ctx.isDm
+    val person = ctx.person(m.userId)
     val density = LocalDensity.current
     val maxSwipe = with(density) { 72.dp.toPx() }
     val swipe = remember { Animatable(0f) }
@@ -101,7 +114,7 @@ fun MessageRow(
     Box(
         Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f * flash))
+            .background(scheme.primary.copy(alpha = 0.10f * flash), RoundedCornerShape(12.dp))
             // Swipe right to reply, like Telegram.
             .pointerInput(m.id) {
                 detectHorizontalDragGestures(
@@ -118,29 +131,31 @@ fun MessageRow(
             },
     ) {
         if (swipe.value > 8f) {
-            Text(
-                "↩️", fontSize = 22.sp,
-                modifier = Modifier.align(Alignment.CenterStart).padding(start = 12.dp).alpha((swipe.value / maxSwipe).coerceIn(0f, 1f)),
+            TonalIcon(
+                GngIcons.Reply, size = 32.dp,
+                modifier = Modifier.align(Alignment.CenterStart).padding(start = 4.dp).alpha((swipe.value / maxSwipe).coerceIn(0f, 1f)),
             )
         }
         Column(
-            Modifier.fillMaxWidth().offset { IntOffset(swipe.value.roundToInt(), 0) }
-                .padding(top = if (run.first) 6.dp else 1.dp),
+            Modifier.fillMaxWidth().offset { IntOffset(swipe.value.roundToInt(), 0) }.padding(top = if (run.first) 8.dp else 0.dp),
             horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
         ) {
-            if (!mine && run.first && !ctx.isDm) {
+            if (!mine && run.first && !oneToOne) {
                 Text(
-                    ctx.nameOf(m.userId), style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 48.dp, bottom = 2.dp),
+                    person.name,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = pickAvatarColor(palette, person.key).content,
+                    modifier = Modifier.padding(start = 52.dp, bottom = 2.dp),
                 )
             }
-            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start) {
-                if (!mine && !ctx.isDm) {
-                    if (run.last) EmojiAvatar(ctx.emojiOf(m.userId), friendColor(m.userId.orEmpty(), dark), size = 32.dp)
+            Row(verticalAlignment = Alignment.Bottom) {
+                if (!mine && !oneToOne) {
+                    if (run.last) Avatar(person.name, person.photoUrl, size = 32.dp, colorKey = person.key)
                     else Spacer(Modifier.width(32.dp))
+                    Spacer(Modifier.width(8.dp))
                 }
-                Box(Modifier.padding(start = 6.dp, end = 6.dp, top = if (reactions.isNotEmpty()) 14.dp else 0.dp)) {
-                    val bubbleMods = Modifier.combinedClickable(
+                Box(Modifier.padding(top = if (reactions.isNotEmpty()) 14.dp else 0.dp)) {
+                    val clicks = Modifier.combinedClickable(
                         onClick = {
                             when {
                                 m.state == SendState.Failed -> onRetry()
@@ -151,7 +166,7 @@ fun MessageRow(
                         onDoubleClick = onDoubleTap,
                         onLongClick = onLongPress,
                     )
-                    BubbleBody(m, ctx, mine, dark, run, media, bubbleMods, onQuoteTap)
+                    BubbleBody(m, ctx, mine, run, media, clicks, onQuoteTap)
                     if (reactions.isNotEmpty()) {
                         TapbackBadge(
                             reactions, ctx.me.id,
@@ -161,14 +176,25 @@ fun MessageRow(
                     }
                 }
             }
-            if (receipt != null) {
-                Text(
-                    receipt.label,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (receipt.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = if (receipt.label.startsWith("Read")) FontWeight.SemiBold else FontWeight.Normal,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp).clickable(enabled = receipt.failed, onClick = onRetry),
-                )
+            // Time under the last bubble of a run; for your latest message, its status too.
+            if (run.last || receipt != null) {
+                val time = m.createdAt.atZone(IST).format(TIME).lowercase()
+                Row(
+                    Modifier.padding(start = if (mine || oneToOne) 6.dp else 46.dp, end = 6.dp, top = 3.dp)
+                        .clickable(enabled = receipt?.failed == true, onClick = onRetry),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (receipt?.failed == true) {
+                        GngIcon(GngIcons.Error, null, size = 14.dp, tint = scheme.error)
+                        Spacer(Modifier.width(4.dp))
+                    }
+                    Text(
+                        if (receipt == null) time else if (receipt.failed || receipt.label == "Sending…") receipt.label else "$time · ${receipt.label}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (receipt?.failed == true) scheme.error else scheme.onSurfaceVariant,
+                        fontWeight = if (receipt?.label?.startsWith("Read") == true) FontWeight.SemiBold else null,
+                    )
+                }
             }
         }
     }
@@ -179,35 +205,36 @@ private fun BubbleBody(
     m: ChatMessage,
     ctx: GroupContext,
     mine: Boolean,
-    dark: Boolean,
     run: RunPosition,
     media: MediaAccess,
     modifier: Modifier,
     onQuoteTap: (Long) -> Unit,
 ) {
+    val scheme = MaterialTheme.colorScheme
     val p = m.payload
-    val time = m.createdAt.atZone(ZoneId.systemDefault()).format(TIME)
-    val pendingAlpha = if (m.state == SendState.Sending) 0.7f else 1f
+    val pendingAlpha = if (m.state == SendState.Sending) 0.65f else 1f
 
     if (p.t == "sticker" && p.media != null) {
         Column(modifier.alpha(pendingAlpha), horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
-            p.replyTo?.let { QuoteBlock(p.replyUser, p.replyText, ctx, mine) { onQuoteTap(it) } }
+            p.replyTo?.let { id -> QuoteBlock(p.replyUser, p.replyText, ctx, mine) { onQuoteTap(id) } }
             EncryptedImage(p.media, media, Modifier.size(150.dp), ContentScale.Fit)
         }
         return
     }
 
     val big = 20.dp
-    val small = 6.dp
+    val tight = 5.dp
     val shape = if (mine) {
-        RoundedCornerShape(big, if (run.first) big else small, if (run.last) small else small, big)
+        RoundedCornerShape(big, if (run.first) big else tight, tight, big)
     } else {
-        RoundedCornerShape(if (run.first) big else small, big, big, if (run.last) small else small)
+        RoundedCornerShape(if (run.first) big else tight, big, big, tight)
     }
-    val container = if (mine) MaterialTheme.colorScheme.primary else friendColor(m.userId.orEmpty(), dark)
-    val content = if (mine) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
-
-    Surface(color = container, contentColor = content, shape = shape, modifier = modifier.widthIn(max = 290.dp).alpha(pendingAlpha)) {
+    Surface(
+        color = if (mine) scheme.primaryContainer else scheme.surfaceContainerHigh,
+        contentColor = if (mine) scheme.onPrimaryContainer else scheme.onSurface,
+        shape = shape,
+        modifier = modifier.widthIn(max = 300.dp).alpha(pendingAlpha),
+    ) {
         Column(Modifier.width(IntrinsicSize.Max)) {
             p.replyTo?.let { id ->
                 Box(Modifier.padding(start = 6.dp, end = 6.dp, top = 6.dp)) {
@@ -219,27 +246,26 @@ private fun BubbleBody(
                     val ratio = ((ref.w ?: 4).toFloat() / (ref.h ?: 3).coerceAtLeast(1)).coerceIn(0.5f, 2f)
                     EncryptedImage(
                         ref, media,
-                        Modifier.widthIn(min = 180.dp, max = 290.dp).aspectRatio(ratio).padding(3.dp).clip(RoundedCornerShape(17.dp)),
+                        Modifier.widthIn(min = 180.dp, max = 300.dp).aspectRatio(ratio).padding(3.dp).clip(RoundedCornerShape(17.dp)),
                         ContentScale.Crop,
                     )
                 }
-                "file" -> p.media?.let { FileCard(it) }
-                "locked" -> Text(
-                    "🔒 Can't decrypt this one (sent before you joined, or to your old phone)",
-                    style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp).alpha(0.8f),
-                )
+                "file" -> p.media?.let { FileRow(it) }
+                "locked" -> Row(Modifier.padding(horizontal = 14.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+                    GngIcon(GngIcons.Lock, null, size = 16.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "Can't decrypt this one (sent before you joined, or to your old phone)",
+                        style = MaterialTheme.typography.bodyMedium, modifier = Modifier.alpha(0.8f),
+                    )
+                }
             }
             val text = p.text?.takeIf { p.t == "text" || p.t == "legacy" || p.t == "image" }
-            Row(Modifier.padding(start = 14.dp, end = 10.dp, bottom = 6.dp, top = if (text != null && p.t != "image") 8.dp else 2.dp), verticalAlignment = Alignment.Bottom) {
-                if (text != null) {
-                    Text(text, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f, fill = false))
-                } else {
-                    Spacer(Modifier.weight(1f))
-                }
+            if (text != null) {
                 Text(
-                    time + if (m.state == SendState.Failed) "  ⚠️" else "",
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.padding(start = 8.dp).alpha(0.7f),
+                    text,
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
                 )
             }
         }
@@ -248,13 +274,14 @@ private fun BubbleBody(
 
 @Composable
 private fun QuoteBlock(userId: String?, text: String?, ctx: GroupContext, mine: Boolean, onClick: () -> Unit) {
-    val accent = if (mine) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary
+    val scheme = MaterialTheme.colorScheme
+    val accent = if (mine) scheme.primary else scheme.tertiary
     Row(
-        Modifier.clip(RoundedCornerShape(10.dp)).background(Color.Black.copy(alpha = 0.08f)).clickable(onClick = onClick)
-            .height(IntrinsicSize.Min).widthIn(min = 120.dp, max = 270.dp),
+        Modifier.clip(RoundedCornerShape(12.dp)).background(scheme.surfaceContainerHighest.copy(alpha = 0.7f))
+            .clickable(onClick = onClick).height(IntrinsicSize.Min).widthIn(min = 120.dp, max = 280.dp),
     ) {
         Box(Modifier.width(3.dp).fillMaxHeight().background(accent))
-        Column(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
             Text(
                 if (userId == ctx.me.id) "You" else ctx.nameOf(userId),
                 style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = accent,
@@ -266,14 +293,14 @@ private fun QuoteBlock(userId: String?, text: String?, ctx: GroupContext, mine: 
 
 @Composable
 private fun TapbackBadge(reactions: Map<String, String>, myId: String, modifier: Modifier) {
-    val mineToo = myId in reactions
+    val scheme = MaterialTheme.colorScheme
     Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = if (mineToo) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+        shape = CircleShape,
+        color = if (myId in reactions) scheme.secondaryContainer else scheme.surfaceContainerHighest,
         shadowElevation = 2.dp,
         modifier = modifier,
     ) {
-        Row(Modifier.padding(horizontal = 6.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(horizontal = 7.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
             reactions.values.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.take(3).forEach { (emoji, _) ->
                 Text(emoji, fontSize = 14.sp)
             }
@@ -283,10 +310,10 @@ private fun TapbackBadge(reactions: Map<String, String>, myId: String, modifier:
 }
 
 @Composable
-private fun FileCard(ref: MediaRef) {
-    Row(Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(fileEmoji(ref.mime), fontSize = 30.sp)
-        Column(Modifier.padding(start = 10.dp)) {
+private fun FileRow(ref: MediaRef) {
+    Row(Modifier.padding(start = 10.dp, end = 14.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        TonalIcon(if (ref.mime == "application/pdf") GngIcons.PictureAsPdf else GngIcons.Description, size = 40.dp)
+        Column(Modifier.padding(start = 12.dp)) {
             Text(ref.name ?: "File", style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(prettySize(ref.size) + " · tap to open", style = MaterialTheme.typography.labelSmall, modifier = Modifier.alpha(0.75f))
         }
@@ -316,47 +343,59 @@ fun EncryptedImage(ref: MediaRef, media: MediaAccess, modifier: Modifier, scale:
     }
 }
 
-/** Lets bubbles fetch attachments without knowing about the view model. */
-interface MediaAccess {
-    fun cached(ref: MediaRef): File?
-    suspend fun load(ref: MediaRef): File
+/** Server-made rows: joins, plans, exams, new notes, calls. */
+@Composable
+fun EventRow(m: ChatMessage, ctx: GroupContext, onOpen: (ChatMessage) -> Unit, onJoinCall: (String) -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    val body = m.payload.text.orEmpty()
+    if (m.kind == "system") {
+        Box(Modifier.fillMaxWidth().padding(vertical = 6.dp, horizontal = 24.dp), contentAlignment = Alignment.Center) {
+            Text(body, style = MaterialTheme.typography.labelMedium, color = scheme.onSurfaceVariant, textAlign = TextAlign.Center)
+        }
+        return
+    }
+    val joinable = m.kind == "call" && m.refId != null && "started" in body
+    val (icon, label) = when (m.kind) {
+        "plan" -> GngIcons.EventFill to "New plan"
+        "exam" -> GngIcons.HourglassTop to "Exam added"
+        "call" -> (if ("video" in body.lowercase()) GngIcons.Videocam else GngIcons.Call) to if (joinable) "Tap to join" else "Call"
+        else -> GngIcons.Description to "New in the stack"
+    }
+    Surface(
+        onClick = { if (m.kind == "call") m.refId?.takeIf { joinable }?.let(onJoinCall) else onOpen(m) },
+        enabled = m.kind != "call" || joinable,
+        shape = MaterialTheme.shapes.large,
+        color = scheme.tertiaryContainer,
+        contentColor = scheme.onTertiaryContainer,
+        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp, horizontal = 4.dp),
+    ) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            TonalIcon(icon, container = scheme.tertiary, content = scheme.onTertiary, size = 40.dp)
+            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                Text(
+                    if (m.kind == "call") label else "$label · ${ctx.nameOf(m.userId)}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = scheme.onTertiaryContainer.copy(alpha = 0.8f),
+                )
+                Text(body, style = MaterialTheme.typography.bodyMedium)
+            }
+            if (m.kind != "call" || joinable) GngIcon(GngIcons.ChevronRight, null)
+        }
+    }
 }
 
 @Composable
-fun EventRow(m: ChatMessage, ctx: GroupContext, onJoinCall: (String) -> Unit) {
-    val who = m.userId?.takeIf { m.kind != "call" }?.let { "${ctx.emojiOf(it)} ${ctx.nameOf(it)} · " } ?: ""
-    val joinable = m.kind == "call" && m.refId != null && m.payload.text?.contains("started") == true
-    Box(Modifier.fillMaxWidth().padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
+fun DaySeparator(label: String) {
+    Box(Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
         Text(
-            who + m.payload.text.orEmpty() + if (joinable) "  · tap to join" else "",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onTertiaryContainer,
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier
-                .clip(RoundedCornerShape(16.dp))
-                .background(MaterialTheme.colorScheme.tertiaryContainer)
-                .clickable(enabled = joinable) { m.refId?.let(onJoinCall) }
-                .padding(horizontal = 14.dp, vertical = 8.dp),
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape)
+                .padding(horizontal = 12.dp, vertical = 4.dp),
         )
     }
-}
-
-@Composable
-fun DayDivider(label: String) {
-    Box(Modifier.fillMaxWidth().padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-fun fileEmoji(mime: String) = when {
-    mime.startsWith("image/") -> "🖼️"
-    mime.startsWith("video/") -> "🎬"
-    mime.startsWith("audio/") -> "🎵"
-    mime == "application/pdf" -> "📕"
-    mime.contains("zip") || mime.contains("compressed") -> "🗜️"
-    mime.contains("sheet") || mime.contains("excel") -> "📊"
-    mime.contains("presentation") || mime.contains("powerpoint") -> "📽️"
-    mime.contains("word") || mime.startsWith("text/") -> "📝"
-    else -> "📄"
 }
 
 fun prettySize(bytes: Long): String = when {
@@ -364,3 +403,4 @@ fun prettySize(bytes: Long): String = when {
     bytes >= 1024 -> "${bytes / 1024} KB"
     else -> "$bytes B"
 }
+

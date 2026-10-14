@@ -14,7 +14,7 @@ import java.time.OffsetDateTime
 data class Profile(
     val id: String,
     @SerialName("display_name") val displayName: String,
-    val emoji: String = "😎",
+    @SerialName("avatar_url") val avatarUrl: String? = null,
     val branch: String? = null,
     val year: Int? = null,
     val birthday: String? = null,
@@ -24,14 +24,27 @@ data class Profile(
 }
 
 @Serializable
+data class CountRow(val count: Int)
+
+@Serializable
 data class Group(
     val id: String,
     val name: String,
-    val emoji: String,
+    /** An icon key (see ui/icons/IconChoices.kt). The column is still called `emoji` for history. */
+    @SerialName("emoji") val icon: String,
     @SerialName("invite_code") val inviteCode: String,
     @SerialName("created_by") val createdBy: String,
+    @SerialName("photo_url") val photoUrl: String? = null,
+    /** Who may change the photo, name and icon. */
+    @SerialName("edit_permission") val editPermission: String = "members",
+    /** Who may send chat messages. */
+    @SerialName("message_permission") val messagePermission: String = "everyone",
+    // Present when selected with `group_members(count)`.
+    @SerialName("group_members") val memberRows: List<CountRow> = emptyList(),
+    /** "gang", or "dm" for a two-person direct message. */
     val kind: String = "gang",
 ) {
+    val memberCount: Int get() = memberRows.firstOrNull()?.count ?: 1
     val isDm get() = kind == "dm"
 }
 
@@ -42,12 +55,12 @@ data class Member(
     val profiles: Profile,
 )
 
-enum class PlanKind(val db: String, val emoji: String, val label: String) {
-    Lunch("lunch", "🍛", "Lunch"),
-    Snacks("snacks", "🍟", "Snacks"),
-    Outing("outing", "🚗", "Outing"),
-    Study("study", "📚", "Study sesh"),
-    Other("other", "✨", "Other");
+enum class PlanKind(val db: String, val label: String) {
+    Lunch("lunch", "Lunch"),
+    Snacks("snacks", "Snacks"),
+    Outing("outing", "Outing"),
+    Study("study", "Study"),
+    Other("other", "Other");
 
     companion object {
         fun of(db: String) = entries.firstOrNull { it.db == db } ?: Other
@@ -93,7 +106,8 @@ data class LunchLog(
     val day: String,
     val dish: String,
     val place: String? = null,
-    val emoji: String = "🍛",
+    /** An icon key (see ui/icons/IconChoices.kt). */
+    @SerialName("emoji") val icon: String = "lunch_dining",
 )
 
 @Serializable
@@ -101,7 +115,7 @@ data class NewLunchLog(
     val day: String,
     val dish: String,
     val place: String?,
-    val emoji: String,
+    @SerialName("emoji") val icon: String,
 )
 
 @Serializable
@@ -132,7 +146,7 @@ data class Zone(
     val id: String,
     @SerialName("group_id") val groupId: String? = null,
     val name: String,
-    val emoji: String,
+    @SerialName("emoji") val icon: String,
     val lat: Double,
     val lng: Double,
     @SerialName("radius_m") val radiusM: Int,
@@ -142,7 +156,7 @@ data class Zone(
 data class NewZone(
     @SerialName("group_id") val groupId: String,
     val name: String,
-    val emoji: String,
+    @SerialName("emoji") val icon: String,
     val lat: Double,
     val lng: Double,
     @SerialName("radius_m") val radiusM: Int,
@@ -163,12 +177,25 @@ data class Presence(
     @SerialName("user_id") val userId: String,
     val mode: String,
     @SerialName("zone_name") val zoneName: String? = null,
-    @SerialName("zone_emoji") val zoneEmoji: String? = null,
+    @SerialName("zone_emoji") val zoneIcon: String? = null,
+    @SerialName("zone_lat") val zoneLat: Double? = null,
+    @SerialName("zone_lng") val zoneLng: Double? = null,
     val lat: Double? = null,
     val lng: Double? = null,
     @SerialName("live_until") val liveUntil: String? = null,
     @SerialName("updated_at") val updatedAt: String,
 )
+
+object GroupPermission {
+    const val MEMBERS = "members"
+    const val ADMINS = "admins"
+    const val EVERYONE = "everyone"
+}
+
+object GroupRole {
+    const val ADMIN = "admin"
+    const val MEMBER = "member"
+}
 
 enum class ExamKind(val db: String, val label: String) {
     Midterm("midterm", "Midsem"),

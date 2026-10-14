@@ -3,34 +3,38 @@ package com.gng.app.ui.group
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SuggestionChip
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.gng.app.AppContainer
@@ -41,14 +45,24 @@ import com.gng.app.data.Plan
 import com.gng.app.data.PlanKind
 import com.gng.app.data.Rsvp
 import com.gng.app.data.TimetableSlot
-import com.gng.app.ui.components.BouncyButton
-import com.gng.app.ui.components.EmojiStrip
-import com.gng.app.ui.components.ErrorBanner
-import com.gng.app.ui.components.FunCard
+import com.gng.app.ui.components.Avatar
+import com.gng.app.ui.components.AvatarInfo
+import com.gng.app.ui.components.AvatarStack
+import com.gng.app.ui.components.Choice
+import com.gng.app.ui.components.GngIcon
+import com.gng.app.ui.components.GngSheet
+import com.gng.app.ui.components.GngTimePickerDialog
+import com.gng.app.ui.components.IconPicker
+import com.gng.app.ui.components.InfoChip
+import com.gng.app.ui.components.MessageEffect
 import com.gng.app.ui.components.SectionHeader
-import com.gng.app.ui.components.pickTime
+import com.gng.app.ui.components.SegmentedChoice
+import com.gng.app.ui.components.TonalIcon
 import com.gng.app.ui.friendly
 import com.gng.app.ui.gngViewModel
+import com.gng.app.ui.icons.FoodIcons
+import com.gng.app.ui.icons.GngIcons
+import com.gng.app.ui.icons.iconRes
 import com.gng.core.ClassSlot
 import com.gng.core.TimeWindow
 import com.gng.core.Timetable
@@ -62,7 +76,6 @@ import java.time.format.DateTimeFormatter
 
 // Edit these to match your campus haunts.
 private val PLACES = listOf("Mic Mac", "Nescafe", "Hostel mess", "Main canteen", "Rohini", "Outside")
-private val FOOD_EMOJIS = listOf("🍛", "🍜", "🥪", "🍕", "🍔", "🥟", "🍱", "🥗", "🍳", "☕")
 
 fun TimetableSlot.toCore() = ClassSlot(DayOfWeek.of(day), startTime, endTime, subject, room)
 
@@ -77,11 +90,14 @@ class PlansViewModel(private val c: AppContainer, private val ctx: GroupContext)
     var lunchWindows by mutableStateOf<List<TimeWindow>?>(null)
         private set
     var error by mutableStateOf<String?>(null)
+        private set
 
     init {
         refresh()
         viewModelScope.launch { c.plans.changes(groupId).collect { refreshPlans() } }
     }
+
+    fun dismissError() { error = null }
 
     fun refresh() = viewModelScope.launch {
         refreshPlans()
@@ -120,8 +136,8 @@ class PlansViewModel(private val c: AppContainer, private val ctx: GroupContext)
         runCatching { c.plans.delete(plan.id) }.onSuccess { refreshPlans() }.onFailure { error = it.friendly() }
     }
 
-    fun logLunch(dish: String, place: String?, emoji: String) = viewModelScope.launch {
-        runCatching { c.plans.logLunch(dish, place, emoji) }.onSuccess { refresh() }.onFailure { error = it.friendly() }
+    fun logLunch(dish: String, place: String?, icon: String) = viewModelScope.launch {
+        runCatching { c.plans.logLunch(dish, place, icon) }.onSuccess { refresh() }.onFailure { error = it.friendly() }
     }
 }
 
@@ -130,67 +146,138 @@ fun PlansTab(ctx: GroupContext) {
     val vm = gngViewModel(key = "plans-${ctx.group.id}") { PlansViewModel(it, ctx) }
     var newPlan by remember { mutableStateOf<PlanKind?>(null) }
     var logLunch by remember { mutableStateOf(false) }
+    MessageEffect(vm.error, vm::dismissError)
 
+    PlansContent(
+        ctx = ctx, plans = vm.plans, rsvps = vm.rsvps, lunch = vm.lunch, lunchWindows = vm.lunchWindows,
+        onNewPlan = { newPlan = it }, onRsvp = vm::rsvp, onDelete = vm::delete, onLogLunch = { logLunch = true },
+    )
+
+    newPlan?.let { kind ->
+        NewPlanSheet(kind, ctx.group.id, onDismiss = { newPlan = null }) { plan -> vm.create(plan) { newPlan = null } }
+    }
+    if (logLunch) {
+        LunchSheet(onDismiss = { logLunch = false }) { dish, place, icon ->
+            vm.logLunch(dish, place, icon)
+            logLunch = false
+        }
+    }
+}
+
+@Composable
+fun PlansContent(
+    ctx: GroupContext,
+    plans: List<Plan>,
+    rsvps: List<Rsvp>,
+    lunch: List<LunchLog>,
+    lunchWindows: List<TimeWindow>?,
+    onNewPlan: (PlanKind) -> Unit,
+    onRsvp: (Plan, String) -> Unit,
+    onDelete: (Plan) -> Unit,
+    onLogLunch: () -> Unit,
+) {
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         item {
-            ErrorBanner(vm.error, Modifier.padding(top = 8.dp))
-            SectionHeader("Who's down?")
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                PlanKind.entries.forEach { k ->
-                    BouncyButton(
-                        "${k.emoji} ${k.label}", { newPlan = k },
-                        container = if (k == PlanKind.Lunch) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer,
-                        content = if (k == PlanKind.Lunch) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer,
-                    )
-                }
+            SectionHeader("Start something")
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                PlanKind.entries.forEach { k -> QuickTile(k, onClick = { onNewPlan(k) }) }
             }
-            vm.lunchWindows?.let { windows ->
-                FunCard(color = MaterialTheme.colorScheme.tertiaryContainer) {
-                    Column {
-                        Text("🕐 When is everyone free for lunch today?", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            if (windows.isEmpty()) "Nobody's free at the same time today 😭"
-                            else windows.joinToString("  ·  ") { "${it.start.hhmm()}–${it.end.hhmm()}" },
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                    }
-                }
+            if (lunchWindows != null) {
+                Spacer(Modifier.height(16.dp))
+                LunchWindowsCard(lunchWindows)
             }
-            SectionHeader("Upcoming")
-            if (vm.plans.isEmpty()) {
-                Text("No plans yet. Be the one who makes it happen ✨", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            SectionHeader("Coming up")
+            if (plans.isEmpty()) {
+                Text(
+                    "No plans yet. Be the one who makes it happen.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
-        items(vm.plans, key = { it.id }) { p ->
-            PlanCard(p, vm.rsvps.filter { it.planId == p.id }, ctx, onRsvp = { vm.rsvp(p, it) }, onDelete = { vm.delete(p) })
+        items(plans, key = { it.id }) { p ->
+            PlanCard(
+                p, rsvps.filter { it.planId == p.id }, ctx,
+                onRsvp = { onRsvp(p, it) }, onDelete = { onDelete(p) },
+            )
         }
         item {
             SectionHeader("Today's lunch board") {
-                TextButton(onClick = { logLunch = true }) { Text("+ what I ate") }
-            }
-            if (vm.lunch.isEmpty()) {
-                Text("Nobody's posted lunch yet. Hungry or mysterious?", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            vm.lunch.forEach { l ->
-                Row(Modifier.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(l.emoji, fontSize = 28.sp)
-                    Column(Modifier.padding(start = 12.dp)) {
-                        Text("${ctx.emojiOf(l.userId)} ${ctx.nameOf(l.userId)}", style = MaterialTheme.typography.labelLarge)
-                        Text(l.dish + (l.place?.let { " @ $it" } ?: ""))
-                    }
+                FilledTonalButton(onClick = onLogLunch) {
+                    GngIcon(GngIcons.Add, null, size = 18.dp)
+                    Spacer(Modifier.width(6.dp))
+                    Text("What I ate")
                 }
             }
-            Spacer(Modifier.height(24.dp))
+            if (lunch.isEmpty()) {
+                Text(
+                    "Nobody's posted lunch yet.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        items(lunch, key = { it.userId }) { l ->
+            val person = ctx.person(l.userId)
+            Row(Modifier.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Avatar(person.name, person.photoUrl, size = 40.dp, colorKey = person.key)
+                Column(Modifier.padding(horizontal = 14.dp).weight(1f)) {
+                    Text(person.name, style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        l.dish + (l.place?.let { " at $it" } ?: ""),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                TonalIcon(FoodIcons.resolve(l.icon).icon, size = 40.dp)
+            }
+        }
+        item { Spacer(Modifier.height(24.dp)) }
+    }
+}
+
+@Composable
+private fun QuickTile(kind: PlanKind, onClick: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    val primary = kind == PlanKind.Lunch
+    Surface(
+        onClick = onClick,
+        shape = MaterialTheme.shapes.large,
+        color = if (primary) scheme.primaryContainer else scheme.secondaryContainer,
+        contentColor = if (primary) scheme.onPrimaryContainer else scheme.onSecondaryContainer,
+    ) {
+        Column(
+            Modifier.width(88.dp).padding(vertical = 14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            GngIcon(kind.iconRes(), null, size = 28.dp)
+            Text(kind.label, style = MaterialTheme.typography.labelLarge)
         }
     }
+}
 
-    newPlan?.let { kind ->
-        NewPlanDialog(kind, ctx.group.id, onDismiss = { newPlan = null }) { plan -> vm.create(plan) { newPlan = null } }
-    }
-    if (logLunch) {
-        LunchDialog(onDismiss = { logLunch = false }) { dish, place, emoji ->
-            vm.logLunch(dish, place, emoji)
-            logLunch = false
+@Composable
+private fun LunchWindowsCard(windows: List<TimeWindow>) {
+    val scheme = MaterialTheme.colorScheme
+    Card(
+        colors = CardDefaults.cardColors(containerColor = scheme.tertiaryContainer, contentColor = scheme.onTertiaryContainer),
+        shape = MaterialTheme.shapes.large,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            TonalIcon(GngIcons.Schedule, container = scheme.tertiary, content = scheme.onTertiary)
+            Column(Modifier.padding(start = 14.dp)) {
+                Text("Free for lunch today", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    if (windows.isEmpty()) "Nobody's free at the same time today."
+                    else windows.joinToString("   ") { "${it.start.hhmm()} to ${it.end.hhmm()}" },
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
         }
     }
 }
@@ -201,63 +288,92 @@ private fun whenLabel(p: Plan): String {
     val start = p.startsInstant.atZone(IST)
     val today = LocalDate.now(IST)
     return when (start.toLocalDate()) {
-        today -> "today " + start.toLocalTime().hhmm()
-        today.plusDays(1) -> "tomorrow " + start.toLocalTime().hhmm()
+        today -> "Today, " + start.toLocalTime().hhmm()
+        today.plusDays(1) -> "Tomorrow, " + start.toLocalTime().hhmm()
         else -> start.format(DAY_TIME)
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PlanCard(p: Plan, rsvps: List<Rsvp>, ctx: GroupContext, onRsvp: (String) -> Unit, onDelete: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
     val mine = rsvps.firstOrNull { it.userId == ctx.me.id }?.answer
-    FunCard {
-        Column {
+    val going = rsvps.filter { it.answer == "in" }.map { ctx.person(it.userId) }
+    Card(
+        colors = CardDefaults.cardColors(containerColor = scheme.surfaceContainer),
+        shape = MaterialTheme.shapes.large,
+        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+    ) {
+        Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(p.planKind.emoji, fontSize = 32.sp)
-                Column(Modifier.padding(start = 12.dp).weight(1f)) {
+                TonalIcon(
+                    p.planKind.iconRes(),
+                    container = if (p.planKind == PlanKind.Lunch) scheme.primaryContainer else scheme.secondaryContainer,
+                    content = if (p.planKind == PlanKind.Lunch) scheme.onPrimaryContainer else scheme.onSecondaryContainer,
+                )
+                Column(Modifier.padding(horizontal = 14.dp).weight(1f)) {
                     Text(p.title, style = MaterialTheme.typography.titleMedium)
                     Text(
-                        listOfNotNull(whenLabel(p), p.place?.let { "📍 $it" }).joinToString("  "),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        "by ${ctx.nameOf(p.createdBy)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = scheme.onSurfaceVariant,
                     )
-                    Text("by ${ctx.nameOf(p.createdBy)}", style = MaterialTheme.typography.labelSmall)
                 }
-                if (p.createdBy == ctx.me.id) TextButton(onClick = onDelete) { Text("🗑️") }
+                if (p.createdBy == ctx.me.id) {
+                    IconButton(onClick = onDelete) {
+                        GngIcon(GngIcons.Delete, "Delete plan", tint = scheme.onSurfaceVariant)
+                    }
+                }
             }
-            p.note?.let { Text(it, modifier = Modifier.padding(top = 6.dp)) }
-            val inPeople = rsvps.filter { it.answer == "in" }
-            if (inPeople.isNotEmpty()) {
+            FlowRow(
+                Modifier.padding(top = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                InfoChip(whenLabel(p), icon = GngIcons.Schedule)
+                p.place?.let { InfoChip(it, icon = GngIcons.LocationOn) }
+            }
+            p.note?.let {
+                Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 10.dp))
+            }
+            Row(Modifier.padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (going.isNotEmpty()) {
+                    AvatarStack(going, ringColor = scheme.surfaceContainer)
+                    Spacer(Modifier.width(4.dp))
+                }
                 Text(
-                    "In: " + inPeople.joinToString(" ") { ctx.emojiOf(it.userId) },
-                    modifier = Modifier.padding(top = 6.dp),
+                    if (going.isEmpty()) "Nobody yet" else "${going.size} going",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = scheme.onSurfaceVariant,
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
-                listOf("in" to "🙋 I'm in", "maybe" to "🤔 maybe", "out" to "🙅 out").forEach { (a, label) ->
-                    val count = rsvps.count { it.answer == a }
-                    FilterChip(
-                        selected = mine == a,
-                        onClick = { onRsvp(a) },
-                        label = { Text(if (count > 0) "$label $count" else label) },
-                    )
-                }
-            }
+            SegmentedChoice(
+                choices = listOf(
+                    Choice("in", "I'm in"),
+                    Choice("maybe", "Maybe"),
+                    Choice("out", "Can't"),
+                ),
+                selected = mine ?: "",
+                onSelect = onRsvp,
+                checkIcon = GngIcons.Check,
+                modifier = Modifier.padding(top = 12.dp),
+            )
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun NewPlanDialog(kind: PlanKind, groupId: String, onDismiss: () -> Unit, onCreate: (NewPlan) -> Unit) {
-    val context = LocalContext.current
+fun NewPlanSheet(kind: PlanKind, groupId: String, onDismiss: () -> Unit, onCreate: (NewPlan) -> Unit) {
     val now = ZonedDateTime.now(IST)
     var title by remember {
         mutableStateOf(
             when (kind) {
                 PlanKind.Lunch -> "Lunch together?"
                 PlanKind.Snacks -> "Evening snacks"
-                PlanKind.Outing -> ""
                 PlanKind.Study -> "Group study"
-                PlanKind.Other -> ""
+                PlanKind.Outing, PlanKind.Other -> ""
             },
         )
     }
@@ -273,58 +389,81 @@ private fun NewPlanDialog(kind: PlanKind, groupId: String, onDismiss: () -> Unit
         )
     }
     var note by remember { mutableStateOf("") }
+    var pickTime by remember { mutableStateOf(false) }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("${kind.emoji} ${kind.label}") },
-        text = {
-            Column {
-                OutlinedTextField(title, { title = it.take(80) }, label = { Text("What's the plan") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                Spacer(Modifier.height(8.dp))
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    PLACES.forEach { AssistChip(onClick = { place = it }, label = { Text(it) }) }
-                }
-                OutlinedTextField(place, { place = it.take(80) }, label = { Text("Where") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    FilterChip(selected = !tomorrow, onClick = { tomorrow = false }, label = { Text("Today") })
-                    FilterChip(selected = tomorrow, onClick = { tomorrow = true }, label = { Text("Tomorrow") })
-                    OutlinedButton(onClick = { pickTime(context, time) { time = it } }) { Text("⏰ ${time.hhmm()}") }
-                }
-                OutlinedTextField(note, { note = it.take(280) }, label = { Text("Note (optional)") }, modifier = Modifier.fillMaxWidth())
+    GngSheet(title = "New ${kind.label.lowercase()} plan", onDismiss = onDismiss) {
+        OutlinedTextField(
+            title, { title = it.take(80) }, label = { Text("What's the plan?") },
+            singleLine = true, modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(16.dp))
+        OutlinedTextField(
+            place, { place = it.take(80) }, label = { Text("Where") },
+            leadingIcon = { GngIcon(GngIcons.LocationOn, null) },
+            singleLine = true, modifier = Modifier.fillMaxWidth(),
+        )
+        FlowRow(
+            Modifier.padding(top = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            PLACES.forEach { SuggestionChip(onClick = { place = it }, label = { Text(it) }) }
+        }
+        Spacer(Modifier.height(20.dp))
+        Text("When", style = MaterialTheme.typography.labelLarge)
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            SegmentedChoice(
+                choices = listOf(Choice(false, "Today"), Choice(true, "Tomorrow")),
+                selected = tomorrow, onSelect = { tomorrow = it },
+                checkIcon = GngIcons.Check, modifier = Modifier.weight(1f),
+            )
+            OutlinedButton(onClick = { pickTime = true }) {
+                GngIcon(GngIcons.Schedule, null, size = 18.dp)
+                Spacer(Modifier.width(6.dp))
+                Text(time.hhmm())
             }
-        },
-        confirmButton = {
-            TextButton(enabled = title.isNotBlank(), onClick = {
+        }
+        Spacer(Modifier.height(16.dp))
+        OutlinedTextField(
+            note, { note = it.take(280) }, label = { Text("Note (optional)") },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(24.dp))
+        Button(
+            enabled = title.isNotBlank(),
+            onClick = {
                 val day = LocalDate.now(IST).plusDays(if (tomorrow) 1 else 0)
                 val startsAt = ZonedDateTime.of(day, time, IST).toInstant()
-                onCreate(
-                    NewPlan(groupId, kind.db, title.trim(), place.trim().ifBlank { null }, startsAt.toString(), note.trim().ifBlank { null }),
-                )
-            }) { Text("Send it 🚀") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
+                onCreate(NewPlan(groupId, kind.db, title.trim(), place.trim().ifBlank { null }, startsAt.toString(), note.trim().ifBlank { null }))
+            },
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+        ) { Text("Send it to the gang") }
+    }
+    if (pickTime) GngTimePickerDialog(time, onDismiss = { pickTime = false }) { time = it; pickTime = false }
 }
 
 @Composable
-private fun LunchDialog(onDismiss: () -> Unit, onSave: (String, String?, String) -> Unit) {
+fun LunchSheet(onDismiss: () -> Unit, onSave: (dish: String, place: String?, icon: String) -> Unit) {
     var dish by remember { mutableStateOf("") }
     var place by remember { mutableStateOf("") }
-    var emoji by remember { mutableStateOf(FOOD_EMOJIS.first()) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("What's on the plate?") },
-        text = {
-            Column {
-                EmojiStrip(FOOD_EMOJIS, emoji) { emoji = it }
-                OutlinedTextField(dish, { dish = it.take(60) }, label = { Text("Dish") }, placeholder = { Text("rajma chawal") }, singleLine = true)
-                OutlinedTextField(place, { place = it.take(60) }, label = { Text("Where (optional)") }, singleLine = true)
-            }
-        },
-        confirmButton = {
-            TextButton(enabled = dish.isNotBlank(), onClick = { onSave(dish.trim(), place.trim().ifBlank { null }, emoji) }) { Text("Post") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
+    var icon by remember { mutableStateOf(FoodIcons.default.key) }
+    GngSheet(title = "What's on the plate?", onDismiss = onDismiss) {
+        IconPicker(FoodIcons, icon) { icon = it }
+        Spacer(Modifier.height(16.dp))
+        OutlinedTextField(
+            dish, { dish = it.take(60) }, label = { Text("Dish") }, placeholder = { Text("Rajma chawal") },
+            singleLine = true, modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(12.dp))
+        OutlinedTextField(
+            place, { place = it.take(60) }, label = { Text("Where (optional)") },
+            singleLine = true, modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(24.dp))
+        Button(
+            enabled = dish.isNotBlank(),
+            onClick = { onSave(dish.trim(), place.trim().ifBlank { null }, icon) },
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+        ) { Text("Post to the board") }
+    }
 }

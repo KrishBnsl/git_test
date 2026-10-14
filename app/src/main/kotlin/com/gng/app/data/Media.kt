@@ -185,7 +185,7 @@ class MediaRepository(
         // Give it its real name so the other app shows something sensible.
         val shared = File(File(context.cacheDir, "shared").apply { mkdirs() }, ref.name ?: file.name)
         withContext(Dispatchers.IO) { file.copyTo(shared, overwrite = true) }
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", shared)
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", shared)
         return Intent(Intent.ACTION_VIEW).setDataAndType(uri, ref.mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
 

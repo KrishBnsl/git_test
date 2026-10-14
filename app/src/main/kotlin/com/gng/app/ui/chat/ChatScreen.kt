@@ -3,8 +3,6 @@ package com.gng.app.ui.chat
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.core.content.ContextCompat
-import com.gng.app.call.CallActivity
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -23,9 +21,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -36,24 +34,21 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
@@ -83,53 +78,71 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil3.compose.AsyncImage
+import com.gng.app.call.CallActivity
 import com.gng.app.container
 import com.gng.app.data.ChatMessage
+import com.gng.app.data.IST
 import com.gng.app.data.MediaRef
+import com.gng.app.data.SendState
+import com.gng.app.data.StickerPack
 import com.gng.app.data.StickerStore
+import com.gng.app.ui.components.Avatar
 import com.gng.app.ui.components.EmptyState
-import com.gng.app.ui.components.ErrorBanner
+import com.gng.app.ui.components.GngIcon
+import com.gng.app.ui.components.GngSheet
+import com.gng.app.ui.components.MessageEffect
 import com.gng.app.ui.gngViewModel
 import com.gng.app.ui.group.GroupContext
-import com.gng.app.ui.theme.LocalIsDark
+import com.gng.app.ui.icons.GngIcons
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 import java.time.LocalDate
-import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-private sealed interface Row_ {
-    val key: Any
-    data class Msg(val m: ChatMessage, val run: RunPosition, val showReceipt: Boolean) : Row_ {
-        override val key: Any get() = m.clientId ?: m.id
-    }
-    data class Day(val label: String, val date: LocalDate) : Row_ {
-        override val key: Any get() = "day-$date"
-    }
-}
+/** Everything the chat shows, so [ChatContent] can be previewed without a view model. */
+data class ChatUiState(
+    val messages: List<ChatMessage> = emptyList(),
+    /** messageId -> (userId -> emoji) */
+    val reactions: Map<Long, Map<String, String>> = emptyMap(),
+    val loaded: Boolean = true,
+    val reachedStart: Boolean = false,
+    val uploads: Int = 0,
+    val replyTo: ChatMessage? = null,
+)
 
-private val DAY_LABEL = DateTimeFormatter.ofPattern("EEE d MMM")
+/** What the chat can do. Defaults do nothing, for previews. */
+data class ChatActions(
+    val onSend: (String) -> Unit = {},
+    val onReply: (ChatMessage?) -> Unit = {},
+    val onReact: (ChatMessage, String) -> Unit = { _, _ -> },
+    val onRetry: (ChatMessage) -> Unit = {},
+    val onDiscard: (ChatMessage) -> Unit = {},
+    val onLoadOlder: () -> Unit = {},
+    val onPhotos: () -> Unit = {},
+    val onFile: () -> Unit = {},
+    val onSticker: (File) -> Unit = {},
+    val onOpenFile: (MediaRef) -> Unit = {},
+    val onSaveMedia: (MediaRef) -> Unit = {},
+    val onSaveSticker: (MediaRef) -> Unit = {},
+    val onJoinCall: (String) -> Unit = {},
+    val onOpenEvent: (ChatMessage) -> Unit = {},
+    val onNotice: (String) -> Unit = {},
+    val receiptFor: (ChatMessage) -> Receipt = { Receipt("Sent") },
+    val detailsFor: (ChatMessage) -> List<Pair<String, String>> = { emptyList() },
+)
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun ChatScreen(ctx: GroupContext) {
+fun ChatScreen(ctx: GroupContext, onOpenEvent: (ChatMessage) -> Unit) {
     val c = LocalContext.current.container
     val vm = gngViewModel(key = "chat-${ctx.group.id}") { ChatViewModel(it, ctx) }
-    val dark = LocalIsDark.current
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val listState = rememberLazyListState()
-    var draft by rememberSaveable { mutableStateOf("") }
-    var actionsFor by remember { mutableStateOf<ChatMessage?>(null) }
-    var infoFor by remember { mutableStateOf<ChatMessage?>(null) }
-    var viewing by remember { mutableStateOf<MediaRef?>(null) }
-    var highlighted by remember { mutableStateOf<Long?>(null) }
-    var stickersOpen by rememberSaveable { mutableStateOf(false) }
+    MessageEffect(vm.error, vm::dismissError)
 
     // Read receipts follow whether you can actually see the chat.
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -149,6 +162,19 @@ fun ChatScreen(ctx: GroupContext) {
         }
     }
 
+    val pickImages = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(10)) { uris ->
+        if (uris.isNotEmpty()) vm.sendImages(context, uris)
+    }
+    val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(vm::sendFile) }
+
+    // "Tap to join" on a call: needs the mic, then opens the call screen.
+    var callToJoin by remember { mutableStateOf<String?>(null) }
+    fun openCallScreen() = context.startActivity(CallActivity.intent(context, callToJoin ?: "", CallActivity.ACTION_SHOW))
+    val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        val id = callToJoin
+        if (ok && id != null) vm.joinCall(id, ::openCallScreen) else if (!ok) vm.error = "Calls need the microphone"
+    }
+
     val media = remember(vm) {
         object : MediaAccess {
             override fun cached(ref: MediaRef) = vm.cachedMedia(ref)
@@ -156,45 +182,119 @@ fun ChatScreen(ctx: GroupContext) {
         }
     }
 
-    val rows = remember(vm.messages) { buildRows(vm.messages, ctx.me.id) }
+    ChatContent(
+        ctx = ctx,
+        state = ChatUiState(vm.messages, vm.reactions, vm.loaded, vm.reachedStart, vm.uploads, vm.replyTo),
+        media = media,
+        stickers = c.stickers,
+        actions = ChatActions(
+            onSend = vm::sendText,
+            onReply = { vm.replyTo = it },
+            onReact = vm::react,
+            onRetry = { vm.retry(it) },
+            onDiscard = { vm.discard(it) },
+            onLoadOlder = vm::loadOlder,
+            onPhotos = { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+            onFile = { pickFile.launch(arrayOf("*/*")) },
+            onSticker = vm::sendSticker,
+            onOpenFile = { vm.openFile(context, it) },
+            onSaveMedia = { vm.saveMedia(it) },
+            onSaveSticker = { vm.saveSticker(it) },
+            onJoinCall = { callId ->
+                callToJoin = callId
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                    vm.joinCall(callId, ::openCallScreen)
+                } else {
+                    askMic.launch(Manifest.permission.RECORD_AUDIO)
+                }
+            },
+            onOpenEvent = onOpenEvent,
+            onNotice = { vm.error = it },
+            receiptFor = vm::receiptFor,
+            detailsFor = vm::detailsFor,
+        ),
+    )
+}
+
+private sealed interface ChatRow {
+    val key: Any
+
+    data class Day(val label: String, val epochDay: Long) : ChatRow { override val key: Any = "d$epochDay" }
+    data class Msg(val m: ChatMessage, val run: RunPosition, val showReceipt: Boolean) : ChatRow {
+        // Optimistic and confirmed copies share a client id, so the row doesn't jump when it's sent.
+        override val key: Any get() = m.clientId ?: m.id
+    }
+}
+
+private val DAY = DateTimeFormatter.ofPattern("EEE, d MMM")
+
+/** Groups messages into runs (same person, within 3 minutes) and adds day separators. */
+private fun buildRows(messages: List<ChatMessage>, myId: String, today: LocalDate): List<ChatRow> {
+    val lastMine = messages.lastOrNull { it.userId == myId && it.isUserMessage && !it.isPending }?.id
+    val out = ArrayList<ChatRow>(messages.size + 8)
+    var lastDay: LocalDate? = null
+    messages.forEachIndexed { i, m ->
+        val day = m.createdAt.atZone(IST).toLocalDate()
+        if (day != lastDay) {
+            out += ChatRow.Day(
+                when (day) {
+                    today -> "Today"
+                    today.minusDays(1) -> "Yesterday"
+                    else -> day.format(DAY)
+                },
+                day.toEpochDay(),
+            )
+            lastDay = day
+        }
+        fun joins(a: ChatMessage?, b: ChatMessage?) = a != null && b != null && a.isUserMessage && b.isUserMessage &&
+            a.userId == b.userId && kotlin.math.abs(a.createdAt.epochSecond - b.createdAt.epochSecond) < 180 &&
+            a.createdAt.atZone(IST).toLocalDate() == b.createdAt.atZone(IST).toLocalDate()
+        out += ChatRow.Msg(
+            m,
+            RunPosition(first = !joins(messages.getOrNull(i - 1), m), last = !joins(m, messages.getOrNull(i + 1))),
+            showReceipt = m.id == lastMine,
+        )
+    }
+    return out
+}
+
+@Composable
+fun ChatContent(
+    ctx: GroupContext,
+    state: ChatUiState,
+    media: MediaAccess,
+    stickers: StickerStore?,
+    actions: ChatActions,
+    today: LocalDate = LocalDate.now(IST),
+) {
+    val scope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
+    var draft by rememberSaveable { mutableStateOf("") }
+    var actionsFor by remember { mutableStateOf<ChatMessage?>(null) }
+    var infoFor by remember { mutableStateOf<ChatMessage?>(null) }
+    var viewing by remember { mutableStateOf<MediaRef?>(null) }
+    var highlighted by remember { mutableStateOf<Long?>(null) }
+    var stickersOpen by rememberSaveable { mutableStateOf(false) }
+
+    val rows = remember(state.messages, today) { buildRows(state.messages, ctx.me.id, today) }
     val reversed = remember(rows) { rows.asReversed() }
 
     // Stick to the bottom when something new arrives and you're already there (or you sent it).
-    val newest = vm.messages.lastOrNull()
+    val newest = state.messages.lastOrNull()
     LaunchedEffect(newest?.clientId ?: newest?.id) {
         if (newest != null && (listState.firstVisibleItemIndex <= 2 || newest.userId == ctx.me.id)) listState.animateScrollToItem(0)
     }
     // Infinite scroll upwards.
-    val nearTop by remember { derivedStateOf { (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= listState.layoutInfo.totalItemsCount - 8 } }
-    LaunchedEffect(nearTop, rows.size) { if (nearTop) vm.loadOlder() }
+    val nearTop by remember {
+        derivedStateOf { (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= listState.layoutInfo.totalItemsCount - 8 }
+    }
+    LaunchedEffect(nearTop, rows.size) { if (nearTop) actions.onLoadOlder() }
     val scrolledUp by remember { derivedStateOf { listState.firstVisibleItemIndex > 4 } }
 
-    val pickImages = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(10)) { uris ->
-        if (uris.isNotEmpty()) vm.sendImages(context, uris)
-    }
-    val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let(vm::sendFile)
-    }
-
-    var callToJoin by remember { mutableStateOf<String?>(null) }
-    fun openCallScreen() = context.startActivity(CallActivity.intent(context, callToJoin ?: "", CallActivity.ACTION_SHOW))
-    val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
-        val id = callToJoin
-        if (ok && id != null) vm.joinCall(id, ::openCallScreen) else if (!ok) vm.error = "Calls need the microphone"
-    }
-    fun joinCall(callId: String) {
-        callToJoin = callId
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-            vm.joinCall(callId, ::openCallScreen)
-        } else {
-            askMic.launch(Manifest.permission.RECORD_AUDIO)
-        }
-    }
-
     fun jumpTo(id: Long) {
-        val index = reversed.indexOfFirst { it is Row_.Msg && it.m.id == id }
+        val index = reversed.indexOfFirst { it is ChatRow.Msg && it.m.id == id }
         if (index < 0) {
-            vm.error = "That message is further back, scroll up to load it"
+            actions.onNotice("That message is further back, scroll up to load it")
             return
         }
         scope.launch {
@@ -206,13 +306,12 @@ fun ChatScreen(ctx: GroupContext) {
     }
 
     Column(Modifier.fillMaxSize().imePadding()) {
-        ErrorBanner(vm.error, Modifier.padding(horizontal = 8.dp, vertical = 4.dp).clickable { vm.error = null })
         Box(Modifier.weight(1f)) {
-            if (vm.loaded && vm.messages.isEmpty()) {
+            if (state.loaded && state.messages.isEmpty()) {
                 EmptyState(
-                    if (ctx.isDm) "👋" else "🦗",
-                    if (ctx.isDm) "Say hi to ${ctx.title}" else "It's quiet…",
-                    "Messages here are end-to-end encrypted 🔒",
+                    if (ctx.isDm) GngIcons.ChatBubble else GngIcons.Forum,
+                    if (ctx.isDm) "Say hi to ${ctx.title.substringBefore(' ')}" else "It's quiet in here",
+                    "Messages here are end-to-end encrypted. Only the people in this chat can read them.",
                     Modifier.align(Alignment.Center),
                 )
             }
@@ -220,132 +319,137 @@ fun ChatScreen(ctx: GroupContext) {
                 state = listState,
                 reverseLayout = true,
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                items(reversed, key = { it.key }, contentType = { if (it is Row_.Day) 0 else 1 }) { row ->
+                items(reversed, key = { it.key }, contentType = { if (it is ChatRow.Day) 0 else 1 }) { row ->
                     when (row) {
-                        is Row_.Day -> DayDivider(row.label)
-                        is Row_.Msg -> {
+                        is ChatRow.Day -> DaySeparator(row.label)
+                        is ChatRow.Msg -> {
                             val m = row.m
                             if (!m.isUserMessage) {
-                                EventRow(m, ctx, onJoinCall = ::joinCall)
+                                EventRow(m, ctx, actions.onOpenEvent, actions.onJoinCall)
                             } else {
                                 val mine = m.userId == ctx.me.id
-                                MessageRow(
-                                    m = m, ctx = ctx, mine = mine, dark = dark, run = row.run,
-                                    reactions = vm.reactions[m.id].orEmpty(),
+                                MessageBubble(
+                                    m = m, ctx = ctx, mine = mine, run = row.run,
+                                    reactions = state.reactions[m.id].orEmpty(),
                                     highlighted = highlighted == m.id,
-                                    receipt = if (mine && (row.showReceipt || m.state != com.gng.app.data.SendState.Sent)) vm.receiptFor(m) else null,
+                                    receipt = if (mine && (row.showReceipt || m.state != SendState.Sent)) actions.receiptFor(m) else null,
                                     media = media,
-                                    onReply = { vm.replyTo = m },
+                                    onReply = { actions.onReply(m) },
                                     onLongPress = { actionsFor = m },
-                                    onDoubleTap = { vm.react(m, "❤️") },
+                                    onDoubleTap = { actions.onReact(m, "❤️") },
                                     onQuoteTap = ::jumpTo,
                                     onOpenImage = { viewing = it },
-                                    onOpenFile = { vm.openFile(context, it) },
-                                    onRetry = { vm.retry(m) },
+                                    onOpenFile = actions.onOpenFile,
+                                    onRetry = { actions.onRetry(m) },
                                 )
                             }
                         }
                     }
                 }
-                if (vm.reachedStart && vm.messages.isNotEmpty()) {
-                    item(key = "start") { DayDivider("🔒 Start of the chat · end-to-end encrypted") }
+                if (state.reachedStart && state.messages.isNotEmpty()) {
+                    item(key = "start") { EncryptedNotice() }
                 }
             }
             androidx.compose.animation.AnimatedVisibility(scrolledUp, Modifier.align(Alignment.BottomEnd).padding(12.dp)) {
                 SmallFloatingActionButton(onClick = { scope.launch { listState.animateScrollToItem(0) } }) {
-                    Icon(Icons.Filled.KeyboardArrowDown, "Latest")
+                    GngIcon(GngIcons.ExpandMore, "Latest")
                 }
             }
         }
 
-        if (vm.uploads > 0) {
+        if (state.uploads > 0) {
             Text(
-                "Encrypting & uploading ${vm.uploads}…", style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                "Encrypting and uploading ${state.uploads}…", style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp),
             )
         }
-        vm.replyTo?.let { target ->
-            ReplyBanner(target, ctx, onClose = { vm.replyTo = null })
-        }
-        Composer(
-            draft = draft,
-            onDraft = { draft = it.take(4000) },
-            stickersOpen = stickersOpen,
-            onToggleStickers = { stickersOpen = !stickersOpen },
-            onPhoto = { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-            onFile = { pickFile.launch(arrayOf("*/*")) },
-            onSend = {
-                vm.sendText(draft)
-                draft = ""
-            },
-        )
-        AnimatedVisibility(stickersOpen) {
-            StickerPanel(c.stickers, onSend = { vm.sendSticker(it); stickersOpen = false })
+        state.replyTo?.let { target -> ReplyBanner(target, ctx, onClose = { actions.onReply(null) }) }
+        if (ctx.canSendMessages) {
+            Composer(
+                draft = draft,
+                onDraft = { draft = it.take(4000) },
+                placeholder = if (ctx.isDm) "Message ${ctx.title.substringBefore(' ')}" else "Message the gang",
+                stickersOpen = stickersOpen,
+                onToggleStickers = { stickersOpen = !stickersOpen },
+                onPhotos = actions.onPhotos,
+                onFile = actions.onFile,
+                onSend = {
+                    actions.onSend(draft)
+                    draft = ""
+                },
+            )
+            if (stickers != null) {
+                AnimatedVisibility(stickersOpen) {
+                    StickerPanel(stickers, onSend = { actions.onSticker(it); stickersOpen = false })
+                }
+            }
+        } else {
+            ReadOnlyBar()
         }
     }
 
     actionsFor?.let { m ->
-        MessageActions(
-            m = m, ctx = ctx, myReaction = vm.reactions[m.id]?.get(ctx.me.id),
+        MessageActionsSheet(
+            m = m, ctx = ctx, myReaction = state.reactions[m.id]?.get(ctx.me.id),
             onDismiss = { actionsFor = null },
-            onReact = { vm.react(m, it); actionsFor = null },
-            onReply = { vm.replyTo = m; actionsFor = null },
+            onReact = { actions.onReact(m, it); actionsFor = null },
+            onReply = { actions.onReply(m); actionsFor = null },
             onInfo = { infoFor = m; actionsFor = null },
-            onSaveMedia = { m.payload.media?.let(vm::saveMedia); actionsFor = null },
-            onSaveSticker = { m.payload.media?.let(vm::saveSticker); actionsFor = null },
-            onRetry = { vm.retry(m); actionsFor = null },
-            onDiscard = { vm.discard(m); actionsFor = null },
+            onSaveMedia = { m.payload.media?.let(actions.onSaveMedia); actionsFor = null },
+            onSaveSticker = { m.payload.media?.let(actions.onSaveSticker); actionsFor = null },
+            onRetry = { actions.onRetry(m); actionsFor = null },
+            onDiscard = { actions.onDiscard(m); actionsFor = null },
         )
     }
-    infoFor?.let { m -> InfoSheet(m, ctx, vm, onDismiss = { infoFor = null }) }
-    viewing?.let { ref -> ImageViewer(ref, media, onSave = { vm.saveMedia(ref) }, onDismiss = { viewing = null }) }
+    infoFor?.let { m ->
+        InfoSheet(m, ctx, actions.receiptFor(m), actions.detailsFor(m), state.reactions[m.id].orEmpty(), onDismiss = { infoFor = null })
+    }
+    viewing?.let { ref -> ImageViewer(ref, media, onSave = { actions.onSaveMedia(ref) }, onDismiss = { viewing = null }) }
 }
 
-/** Groups messages into runs (same person, within 3 minutes) and adds day dividers. */
-private fun buildRows(messages: List<ChatMessage>, myId: String): List<Row_> {
-    val zone = ZoneId.systemDefault()
-    val today = LocalDate.now(zone)
-    val lastMine = messages.lastOrNull { it.userId == myId && it.isUserMessage && !it.isPending }?.id
-    val out = ArrayList<Row_>(messages.size + 8)
-    var lastDay: LocalDate? = null
-    messages.forEachIndexed { i, m ->
-        val day = m.createdAt.atZone(zone).toLocalDate()
-        if (day != lastDay) {
-            out += Row_.Day(
-                when (day) {
-                    today -> "Today"
-                    today.minusDays(1) -> "Yesterday"
-                    else -> day.format(DAY_LABEL)
-                },
-                day,
-            )
-            lastDay = day
-        }
-        val prev = messages.getOrNull(i - 1)
-        val next = messages.getOrNull(i + 1)
-        fun sameRun(a: ChatMessage?, b: ChatMessage?) = a != null && b != null && a.isUserMessage && b.isUserMessage &&
-            a.userId == b.userId && kotlin.math.abs(a.createdAt.epochSecond - b.createdAt.epochSecond) < 180 &&
-            a.createdAt.atZone(zone).toLocalDate() == b.createdAt.atZone(zone).toLocalDate()
-        out += Row_.Msg(m, RunPosition(first = !sameRun(prev, m), last = !sameRun(m, next)), showReceipt = m.id == lastMine)
+@Composable
+private fun EncryptedNotice() {
+    Row(Modifier.fillMaxWidth().padding(vertical = 16.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+        GngIcon(GngIcons.Encrypted, null, size = 16.dp, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.width(6.dp))
+        Text("Start of the chat · end-to-end encrypted", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
-    return out
 }
 
 @Composable
 private fun ReplyBanner(target: ChatMessage, ctx: GroupContext, onClose: () -> Unit) {
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
+    val scheme = MaterialTheme.colorScheme
+    Surface(color = scheme.surfaceContainer) {
         Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.width(3.dp).height(36.dp).background(MaterialTheme.colorScheme.primary))
-            Column(Modifier.weight(1f).padding(start = 10.dp)) {
+            GngIcon(GngIcons.Reply, null, tint = scheme.primary)
+            Column(Modifier.weight(1f).padding(start = 12.dp)) {
                 Text(
                     "Replying to " + if (target.userId == ctx.me.id) "yourself" else ctx.nameOf(target.userId),
-                    style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.labelMedium, color = scheme.primary,
                 )
                 Text(target.payload.preview(), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
             }
-            IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "Cancel reply") }
+            IconButton(onClick = onClose) { GngIcon(GngIcons.Close, "Cancel reply") }
+        }
+    }
+}
+
+/** Shown instead of the input when an admin has limited who can message. */
+@Composable
+private fun ReadOnlyBar() {
+    val scheme = MaterialTheme.colorScheme
+    Surface(
+        color = scheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(28.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Row(Modifier.padding(horizontal = 18.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            GngIcon(GngIcons.Lock, null, tint = scheme.onSurfaceVariant, size = 20.dp)
+            Spacer(Modifier.width(12.dp))
+            Text("Only admins can send messages in this gang", style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant)
         }
     }
 }
@@ -354,39 +458,52 @@ private fun ReplyBanner(target: ChatMessage, ctx: GroupContext, onClose: () -> U
 private fun Composer(
     draft: String,
     onDraft: (String) -> Unit,
+    placeholder: String,
     stickersOpen: Boolean,
     onToggleStickers: () -> Unit,
-    onPhoto: () -> Unit,
+    onPhotos: () -> Unit,
     onFile: () -> Unit,
     onSend: () -> Unit,
 ) {
+    val scheme = MaterialTheme.colorScheme
     var attach by remember { mutableStateOf(false) }
-    Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.Bottom) {
         Box {
-            IconButton(onClick = { attach = true }) { Text("➕", fontSize = 20.sp) }
+            IconButton(onClick = { attach = true }, modifier = Modifier.padding(bottom = 4.dp)) { GngIcon(GngIcons.Add, "Attach") }
             DropdownMenu(attach, onDismissRequest = { attach = false }) {
-                DropdownMenuItem(text = { Text("📷  Photos") }, onClick = { attach = false; onPhoto() })
-                DropdownMenuItem(text = { Text("📎  File") }, onClick = { attach = false; onFile() })
+                DropdownMenuItem(
+                    text = { Text("Photos") }, leadingIcon = { GngIcon(GngIcons.PhotoLibrary, null) },
+                    onClick = { attach = false; onPhotos() },
+                )
+                DropdownMenuItem(
+                    text = { Text("File") }, leadingIcon = { GngIcon(GngIcons.AttachFile, null) },
+                    onClick = { attach = false; onFile() },
+                )
             }
         }
-        TextField(
-            value = draft,
-            onValueChange = onDraft,
-            placeholder = { Text("say something unhinged") },
-            modifier = Modifier.weight(1f),
-            maxLines = 5,
-            shape = RoundedCornerShape(24.dp),
-            colors = TextFieldDefaults.colors(
-                focusedIndicatorColor = Color.Transparent,
-                unfocusedIndicatorColor = Color.Transparent,
-                disabledIndicatorColor = Color.Transparent,
-            ),
-            trailingIcon = {
-                IconButton(onClick = onToggleStickers) { Text(if (stickersOpen) "⌨️" else "😀", fontSize = 20.sp) }
-            },
-        )
-        FilledIconButton(onClick = onSend, enabled = draft.isNotBlank(), modifier = Modifier.padding(start = 6.dp)) {
-            Icon(Icons.AutoMirrored.Filled.Send, "Send")
+        Surface(shape = RoundedCornerShape(28.dp), color = scheme.surfaceContainerHigh, modifier = Modifier.weight(1f)) {
+            TextField(
+                value = draft,
+                onValueChange = onDraft,
+                placeholder = { Text(placeholder) },
+                maxLines = 5,
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                ),
+                trailingIcon = {
+                    IconButton(onClick = onToggleStickers) {
+                        GngIcon(GngIcons.Mood, if (stickersOpen) "Hide stickers" else "Stickers", tint = if (stickersOpen) scheme.primary else scheme.onSurfaceVariant)
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        FilledIconButton(onClick = onSend, enabled = draft.isNotBlank(), modifier = Modifier.padding(bottom = 4.dp)) {
+            GngIcon(GngIcons.Send, "Send")
         }
     }
 }
@@ -403,42 +520,41 @@ private fun StickerPanel(store: StickerStore, onSend: (File) -> Unit) {
 
     val importFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
         tree ?: return@rememberLauncherForActivityResult
-        scope.launch {
-            message = runCatching { store.importWhatsAppFolder(tree) }
-                .fold({ "Added $it stickers from WhatsApp" }, { it.message })
-        }
+        scope.launch { message = runCatching { store.importWhatsAppFolder(tree) }.fold({ "Added $it stickers from WhatsApp" }, { it.message }) }
     }
     val importFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
         scope.launch { message = runCatching { store.importFiles(uris) }.fold({ "Added $it stickers" }, { it.message }) }
     }
 
-    Surface(tonalElevation = 2.dp) {
-        Column(Modifier.fillMaxWidth().height(300.dp).navigationBarsPadding()) {
-            LazyRow(contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(packs, key = { it.id }) { pack ->
+    Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
+        Column(Modifier.fillMaxWidth().height(300.dp)) {
+            LazyRow(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(packs, key = { it.id }) { pack: StickerPack ->
                     FilterChip(selected = (selected ?: packs.firstOrNull()?.id) == pack.id, onClick = { selected = pack.id }, label = { Text(pack.name) })
                 }
                 item {
-                    FilterChip(selected = false, onClick = { importFolder.launch(StickerStore.WHATSAPP_STICKERS_URI) }, label = { Text("➕ From WhatsApp") })
+                    FilterChip(
+                        selected = false, onClick = { importFolder.launch(StickerStore.WHATSAPP_STICKERS_URI) },
+                        label = { Text("From WhatsApp") }, leadingIcon = { GngIcon(GngIcons.Add, null, size = 18.dp) },
+                    )
                 }
                 item {
                     FilterChip(
-                        selected = false,
-                        onClick = { importFiles.launch(arrayOf("application/zip", "application/octet-stream", "image/*")) },
-                        label = { Text("➕ Pack / images") },
+                        selected = false, onClick = { importFiles.launch(arrayOf("application/zip", "application/octet-stream", "image/*")) },
+                        label = { Text("Pack or images") }, leadingIcon = { GngIcon(GngIcons.UploadFile, null, size = 18.dp) },
                     )
                 }
             }
-            message?.let { Text(it, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = 12.dp)) }
+            message?.let { Text(it, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = 16.dp)) }
             val pack = packs.firstOrNull { it.id == selected } ?: packs.firstOrNull()
             if (pack == null) {
-                Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("No stickers yet", style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "Tap \"From WhatsApp\" and pick the WhatsApp Stickers folder it opens, " +
-                            "or import a .wastickers pack. You can also long-press any sticker in a chat to save it.",
+                        "Tap \"From WhatsApp\" and pick the WhatsApp Stickers folder it opens, or import a .wastickers pack. " +
+                            "You can also long-press any sticker in a chat to save it.",
                         style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -456,18 +572,18 @@ private fun StickerPanel(store: StickerStore, onSend: (File) -> Unit) {
         }
     }
     deleting?.let { file ->
-        androidx.compose.material3.AlertDialog(
+        AlertDialog(
             onDismissRequest = { deleting = null },
+            icon = { GngIcon(GngIcons.Delete, null) },
             title = { Text("Remove this sticker?") },
-            confirmButton = { androidx.compose.material3.TextButton(onClick = { scope.launch { store.delete(file) }; deleting = null }) { Text("Remove") } },
-            dismissButton = { androidx.compose.material3.TextButton(onClick = { deleting = null }) { Text("Keep") } },
+            confirmButton = { TextButton(onClick = { scope.launch { store.delete(file) }; deleting = null }) { Text("Remove") } },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text("Keep") } },
         )
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MessageActions(
+private fun MessageActionsSheet(
     m: ChatMessage,
     ctx: GroupContext,
     myReaction: String?,
@@ -481,63 +597,70 @@ private fun MessageActions(
     onDiscard: () -> Unit,
 ) {
     val clipboard = LocalClipboardManager.current
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 24.dp)) {
-            if (!m.isPending) {
-                // Tapback bar
-                Surface(shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(horizontal = 6.dp, vertical = 4.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-                        TAPBACKS.forEach { e ->
-                            Box(
-                                Modifier.size(40.dp).clip(CircleShape)
-                                    .background(if (e == myReaction) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
-                                    .clickable { onReact(e) },
-                                contentAlignment = Alignment.Center,
-                            ) { Text(e, fontSize = 22.sp) }
-                        }
+    val scheme = MaterialTheme.colorScheme
+    GngSheet(title = m.payload.preview().take(60).ifBlank { "Message" }, onDismiss = onDismiss) {
+        if (!m.isPending) {
+            // Tapbacks, one per person.
+            Surface(shape = RoundedCornerShape(28.dp), color = scheme.surfaceContainerHigh, modifier = Modifier.fillMaxWidth()) {
+                Row(Modifier.padding(horizontal = 6.dp, vertical = 4.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    TAPBACKS.forEach { e ->
+                        Box(
+                            Modifier.size(40.dp).clip(CircleShape)
+                                .background(if (e == myReaction) scheme.secondaryContainer else Color.Transparent)
+                                .clickable { onReact(e) },
+                            contentAlignment = Alignment.Center,
+                        ) { Text(e, fontSize = 22.sp) }
                     }
                 }
-                Spacer(Modifier.height(8.dp))
             }
-            Text(m.payload.preview(), maxLines = 3, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(vertical = 8.dp))
-            HorizontalDivider()
-            if (m.state == com.gng.app.data.SendState.Failed) {
-                ActionItem("🔁  Try again", onRetry)
-                ActionItem("🗑️  Delete", onDiscard)
-            }
-            if (!m.isPending) ActionItem("↩️  Reply", onReply)
-            m.payload.text?.takeIf { it.isNotBlank() }?.let { text ->
-                ActionItem("📋  Copy") { clipboard.setText(AnnotatedString(text)); onDismiss() }
-            }
-            if (m.payload.t == "image") ActionItem("💾  Save to gallery", onSaveMedia)
-            if (m.payload.t == "sticker" && m.userId != ctx.me.id) ActionItem("⭐  Save sticker", onSaveSticker)
-            if (m.userId == ctx.me.id && !m.isPending) ActionItem("ℹ️  Info", onInfo)
+            Spacer(Modifier.height(8.dp))
         }
+        if (m.state == SendState.Failed) {
+            SheetAction(GngIcons.Refresh, "Try again", onRetry)
+            SheetAction(GngIcons.Delete, "Delete", onDiscard)
+        }
+        if (!m.isPending) SheetAction(GngIcons.Reply, "Reply", onReply)
+        m.payload.text?.takeIf { it.isNotBlank() }?.let { text ->
+            SheetAction(GngIcons.ContentCopy, "Copy") { clipboard.setText(AnnotatedString(text)); onDismiss() }
+        }
+        if (m.payload.t == "image") SheetAction(GngIcons.Download, "Save to gallery", onSaveMedia)
+        if (m.payload.t == "sticker" && m.userId != ctx.me.id) SheetAction(GngIcons.Star, "Save sticker", onSaveSticker)
+        if (m.userId == ctx.me.id && !m.isPending) SheetAction(GngIcons.Info, "Info", onInfo)
     }
 }
 
 @Composable
-private fun ActionItem(label: String, onClick: () -> Unit) {
-    Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 14.dp))
+private fun SheetAction(icon: Int, label: String, onClick: () -> Unit) {
+    ListItem(
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        modifier = Modifier.clickable(onClick = onClick),
+        leadingContent = { GngIcon(icon, null) },
+        headlineContent = { Text(label) },
+    )
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun InfoSheet(m: ChatMessage, ctx: GroupContext, vm: ChatViewModel, onDismiss: () -> Unit) {
-    val reactions = vm.reactions[m.id].orEmpty()
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
-            Text("Message info", style = MaterialTheme.typography.titleLarge)
-            Text(vm.receiptFor(m).label, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(vertical = 6.dp))
-            vm.detailsFor(m).forEach { (uid, status) ->
-                Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(ctx.emojiOf(uid), fontSize = 22.sp)
-                    Text(ctx.nameOf(uid), modifier = Modifier.weight(1f).padding(start = 12.dp))
-                    reactions[uid]?.let { Text(it, fontSize = 18.sp, modifier = Modifier.padding(end = 8.dp)) }
-                    Text(status, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
-                }
-            }
+private fun InfoSheet(
+    m: ChatMessage,
+    ctx: GroupContext,
+    receipt: Receipt,
+    details: List<Pair<String, String>>,
+    reactions: Map<String, String>,
+    onDismiss: () -> Unit,
+) {
+    GngSheet(title = "Message info", onDismiss = onDismiss) {
+        Text(receipt.label, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleSmall)
+        Spacer(Modifier.height(8.dp))
+        HorizontalDivider()
+        details.forEach { (uid, status) ->
+            val person = ctx.person(uid)
+            ListItem(
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                leadingContent = { Avatar(person.name, person.photoUrl, size = 40.dp, colorKey = person.key) },
+                headlineContent = { Text(person.name) },
+                supportingContent = { Text(status) },
+                trailingContent = { reactions[uid]?.let { Text(it, fontSize = 20.sp) } },
+            )
         }
     }
 }
@@ -562,12 +685,15 @@ private fun ImageViewer(ref: MediaRef, media: MediaAccess, onSave: () -> Unit, o
                     .graphicsLayer(scaleX = scale, scaleY = scale, translationX = offsetX, translationY = offsetY),
                 ContentScale.Fit,
             )
-            Row(Modifier.align(Alignment.TopEnd).padding(16.dp)) {
-                OutlinedButton(onClick = onSave) { Text("💾 Save", color = Color.White) }
+            Row(Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(12.dp)) {
+                FilledTonalButton(onClick = onSave) {
+                    GngIcon(GngIcons.Download, null, size = 18.dp)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Save")
+                }
                 Spacer(Modifier.width(8.dp))
-                OutlinedButton(onClick = onDismiss) { Text("✕", color = Color.White) }
+                IconButton(onClick = onDismiss) { GngIcon(GngIcons.Close, "Close", tint = Color.White) }
             }
         }
     }
 }
-

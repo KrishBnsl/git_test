@@ -37,7 +37,7 @@ class CallActivity : ComponentActivity() {
         enableEdgeToEdge()
         handle(intent)
         setContent {
-            GngTheme(ThemeMode.Dark) { CallScreen(container.calls, onClose = { finish() }) }
+            GngTheme(ThemeMode.Dark, dynamicColor = false) { CallScreen(container.calls, onClose = { finish() }) }
         }
         // Close once the call is gone.
         lifecycleScope.launch {

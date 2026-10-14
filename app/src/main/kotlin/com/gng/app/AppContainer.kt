@@ -20,6 +20,7 @@ import com.gng.app.location.CheckIn
 import com.gng.app.notify.Inbox
 import com.gng.app.notify.Notifier
 import com.gng.app.notify.PushRegistry
+import com.gng.app.update.UpdateManager
 
 /** Hand-rolled dependency container; small enough that a DI framework would be overkill. */
 class AppContainer(context: Context) {
@@ -47,4 +48,5 @@ class AppContainer(context: Context) {
     val push by lazy { PushRegistry(context, client) }
     val inbox by lazy { Inbox(this) }
     val calls by lazy { CallManager(context, client, { auth.userId }, notifier) }
+    val updates by lazy { UpdateManager(context.applicationContext, settings) }
 }

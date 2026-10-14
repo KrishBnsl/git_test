@@ -29,10 +29,10 @@ object Birthdays {
             .filter { it.daysAway <= withinDays }
             .sortedBy { it.daysAway }
 
-    fun label(b: UpcomingBirthday): String = when (b.daysAway) {
-        0 -> "🎂 ${b.birthday.name} turns ${b.turning} TODAY!"
-        1 -> "🎁 ${b.birthday.name}'s birthday is tomorrow"
-        in 2..7 -> "🎈 ${b.birthday.name} in ${b.daysAway} days"
-        else -> "📅 ${b.birthday.name} in ${b.daysAway} days"
+    /** "Today", "Tomorrow" or "in 5 days". */
+    fun whenLabel(b: UpcomingBirthday): String = when (b.daysAway) {
+        0 -> "Today"
+        1 -> "Tomorrow"
+        else -> "in ${b.daysAway} days"
     }
 }

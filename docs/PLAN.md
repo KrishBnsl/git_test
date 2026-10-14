@@ -94,7 +94,7 @@ Spots ("zones") are pinned by the gang itself: stand at the Library, tap **📌 
 ```
 
 * **Schema**: `supabase/migrations/0001_init.sql` (tables, policies, RPCs, triggers, bucket, realtime) and
-  `0002_chat.sql` (DMs, encryption keys, receipts, reactions, push tokens, calls, chat media).
+  `0005_chat.sql` (encrypted DMs, encryption keys, receipts, reactions, push tokens, calls, chat media).
 * **Caching**: decrypted messages and reactions live in an on-device SQLite cache (`ChatCache`), so chats open
   instantly and work offline; only newer messages are fetched. Sends are optimistic ("Sending…" → "Sent").
 * **Modules**: `:core` is plain Kotlin/JVM so the fiddly logic (zone matching, common free windows, leap-day birthdays) is unit-tested without an emulator. `:app` is the Android app.
@@ -131,7 +131,37 @@ Spots ("zones") are pinned by the gang itself: stand at the Library, tap **📌 
 - [x] Settings: light/dark/system theme, edit profile, log out
 - [x] CI: GitHub Actions runs core tests and builds a debug APK you can sideload
 
-## 5b. Chat overhaul (this branch)
+## 5b. Design refresh
+
+The MVP's emoji-driven look was replaced with a proper **Material You (Material 3)** design. See [DESIGN.md](DESIGN.md).
+
+- Dynamic colour from the wallpaper on Android 12+, with a pink-and-teal brand palette as the fallback
+- Plus Jakarta Sans typography, rounder shapes, Material Symbols Rounded icons instead of emoji
+- Profile photos (initials as the fallback), icon pickers for gangs, spots and meals
+- Reworked Chat, Plans, Squad, Study, onboarding and settings, with bottom sheets for create flows
+- Debug-only screen gallery with sample data for design review
+
+## 5c. Map and group settings
+
+- **Map tab.** Everyone in the gang as an avatar on an OpenStreetMap map of campus, Snap Map style. People in **Live** mode appear at their exact position (with a pulsing ring); people in **Spot** mode appear on their pinned spot, never their real position; **Ghost** people don't appear. Check-ins older than 6 hours drop off, and ones older than 45 minutes are drawn faded. Avatars on the same spot fan out so none hides another. Tap an avatar for a details card with "Open in Maps".
+- **Group settings** (tap the gang's name, or menu, Group settings). Anyone allowed to edit can change the gang's **photo**, name and icon. **Admins** choose who can edit the gang (members or admins only) and who can send messages (everyone or admins only), and can make or remove admins. If the last admin leaves, the longest-standing member is promoted.
+- All of this is enforced **in the database** (migration `0003`), not just hidden in the app: members can't change permissions, a locked chat rejects messages from non-admins, and group photos can only be uploaded to the gang's own folder.
+
+## 5d. Direct messages
+
+One-to-one chats between people who share a gang, reusing the gang chat's look.
+
+- **Who:** anyone in at least one of your gangs. Open a chat from the **Messages** icon on the home screen (with an unread badge), or tap **Message** on someone in the Squad list, on their map card, or in group settings.
+- **What:** realtime text, reactions, an inbox ordered by recent activity with previews and unread counts.
+- **Privacy:** only the two people can read a conversation (database row-level security). Conversations are created through a function that checks you share a gang. **If you stop sharing any gang with someone, neither of you can send new messages**, but you both keep the history. Leaving a shared gang is the way to cut contact.
+- Gang-level "who can send messages" settings don't apply to DMs.
+- *Replaced in 5f*: DMs are now end-to-end encrypted conversations that sit in the home list next to gangs. The `0004` tables are left in place (nothing is deleted) but the app no longer uses them.
+
+## 5e. In-app updates
+
+Friends get gng from GitHub Releases, so the app updates itself from there (see [SETUP.md](SETUP.md#updates)): it finds the latest release through GitHub's public API, downloads the APK, verifies it, and hands it to Android's installer. Verification checks the package name, that the version is newer, and that the signing certificate matches the installed app. Android still shows its own "Update" confirmation; silent installs aren't possible outside the Play Store. Only `https://github.com/...` download links are trusted. Version comparison, and turning GitHub's generated release notes into bullets, are unit-tested in `core`.
+
+## 5f. Chat overhaul: encryption, DMs, receipts, media, push, calls
 
 - [x] End-to-end encryption for all chat content (see §3b)
 - [x] DMs in the main list, alongside gangs; unread badges and previews
@@ -149,9 +179,9 @@ Spots ("zones") are pinned by the gang itself: stand at the Library, tap **📌 
 **Phase 2: make it sticky**
 - More push types: someone RSVP'd to your plan, birthday morning, exam tomorrow
 - Daily birthday post in chat (pg_cron)
-- Map view of live friends (osmdroid / Google Maps Compose)
 - Lunch board photos
-- Mentions (@name), message delete/edit, typing indicators, voice notes
+- Optional: Play Store distribution (internal testing track) for fully automatic background updates
+- Mentions (@name), message delete/edit, block someone in DMs, typing indicators, voice notes
 - Polls ("Domino's or Mic Mac?")
 
 **Phase 3: more fun**
@@ -169,6 +199,10 @@ Spots ("zones") are pinned by the gang itself: stand at the Library, tap **📌 
 
 ## 7. Known limitations
 
+- On the map, people whose spots are close together can overlap when you zoom far out. Zoom in and they separate.
+- The seeded "DTU campus" spot has its centre in the middle of campus, so anyone in spot mode who isn't at a more specific pinned spot is drawn there.
+- Map tiles use OpenStreetMap's free public servers (fair use, no key).
+
 - Android limits background checks to about every 15 minutes, and only with "Allow all the time" location permission. Without it, check-ins happen when you open the app or tap **Check in**.
 - Realtime can't filter DELETE events, so un-reacting and un-RSVPing by *other* people show up on the next refresh rather than instantly.
 - A zone pinned in one gang can appear by name to another gang you're in, if you're standing in it.
@@ -181,4 +215,4 @@ Spots ("zones") are pinned by the gang itself: stand at the Library, tap **📌 
 - Group calls are a mesh: each phone sends its video to everyone else, so beyond ~5–6 people quality drops.
 - Without a TURN server, calls may fail on networks that block peer-to-peer traffic.
 - Read times are exact only for the latest message (receipts are per-person cursors, not per message).
-- People on the old app version can't send messages after `0002_chat.sql` until they update.
+- People on the old app version can't send messages after `0005_chat.sql` until they update.

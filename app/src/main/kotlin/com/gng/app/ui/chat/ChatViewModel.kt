@@ -45,6 +45,7 @@ class ChatViewModel(private val c: AppContainer, private val ctx: GroupContext) 
         private set
     var replyTo by mutableStateOf<ChatMessage?>(null)
     var error by mutableStateOf<String?>(null)
+    fun dismissError() { error = null }
     var loaded by mutableStateOf(false)
         private set
     var reachedStart by mutableStateOf(false)

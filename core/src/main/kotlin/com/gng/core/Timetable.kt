@@ -37,12 +37,6 @@ object Timetable {
         return if (next == null) ClassStatus.DoneForToday else ClassStatus.Free(next)
     }
 
-    fun label(status: ClassStatus): String = when (status) {
-        is ClassStatus.InClass -> "📖 in ${status.slot.subject} till ${status.slot.end.hhmm()}"
-        is ClassStatus.Free -> "🟢 free till ${status.nextClass.start.hhmm()}"
-        ClassStatus.DoneForToday -> "🎉 done for today"
-    }
-
     /**
      * Windows on [day] between [from] and [to] where nobody in [people] has a class
      * and that last at least [minMinutes]. Powers "when can we all grab lunch?".

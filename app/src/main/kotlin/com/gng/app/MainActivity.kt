@@ -11,6 +11,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.IntentCompat
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.gng.app.data.ThemeMode
@@ -22,12 +23,15 @@ class MainActivity : ComponentActivity() {
     private var openGroup by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        container.updates.checkIfDue()
         handle(intent)
         setContent {
             val theme by container.settings.theme.collectAsStateWithLifecycle(ThemeMode.System)
-            GngTheme(theme) { RootScreen(openGroup = openGroup, onOpened = { openGroup = null }) }
+            val dynamic by container.settings.dynamicColor.collectAsStateWithLifecycle(true)
+            GngTheme(theme, dynamic) { RootScreen(openGroup = openGroup, onOpened = { openGroup = null }) }
         }
     }
 

@@ -1,8 +1,14 @@
 package com.gng.app.ui.root
 
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
@@ -13,11 +19,17 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.gng.app.data.Profile
+import com.gng.app.container
+import com.gng.app.ui.components.Loading
+import com.gng.app.ui.friendly
 import com.gng.app.ui.group.GroupHomeScreen
+import com.gng.app.ui.group.GroupSettingsScreen
 import com.gng.app.ui.groups.GroupsScreen
 import com.gng.app.ui.profile.ProfileScreen
 import com.gng.app.ui.settings.SettingsScreen
 import com.gng.app.ui.timetable.TimetableScreen
+
+private const val DURATION = 300
 
 @Composable
 fun MainNav(me: Profile, onProfileSaved: (Profile) -> Unit, openGroup: String? = null, onOpened: () -> Unit = {}) {
@@ -37,7 +49,15 @@ fun MainNav(me: Profile, onProfileSaved: (Profile) -> Unit, openGroup: String? =
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
-    NavHost(nav, startDestination = "groups") {
+    NavHost(
+        nav,
+        startDestination = "groups",
+        // Forward navigation fades in with a short slide; going back mirrors it.
+        enterTransition = { fadeIn(tween(DURATION)) + slideInHorizontally(tween(DURATION)) { it / 14 } },
+        exitTransition = { fadeOut(tween(DURATION / 2)) },
+        popEnterTransition = { fadeIn(tween(DURATION)) },
+        popExitTransition = { fadeOut(tween(DURATION / 2)) + slideOutHorizontally(tween(DURATION)) { it / 14 } },
+    ) {
         composable("groups") {
             GroupsScreen(
                 me = me,
@@ -51,6 +71,28 @@ fun MainNav(me: Profile, onProfileSaved: (Profile) -> Unit, openGroup: String? =
                 me = me,
                 onBack = { nav.popBackStack() },
                 onTimetable = { nav.navigate("timetable") },
+                onSettings = { nav.navigate("group/${entry.arguments?.getString("groupId")}/settings") },
+                onMessage = { nav.navigate("dm/$it") },
+            )
+        }
+        composable("group/{groupId}/settings") { entry ->
+            GroupSettingsScreen(
+                groupId = entry.arguments?.getString("groupId")!!,
+                me = me,
+                onBack = { nav.popBackStack() },
+                // Leaving removes the gang from your list, so go all the way back to it.
+                onLeft = { nav.popBackStack("groups", inclusive = false) },
+                onMessage = { nav.navigate("dm/$it") },
+            )
+        }
+        // "Message" on someone's profile: find or create the DM, then show it like any other chat.
+        composable("dm/{userId}") { entry ->
+            OpenDm(
+                userId = entry.arguments?.getString("userId")!!,
+                onOpened = { dmId ->
+                    nav.navigate("group/$dmId") { popUpTo("dm/{userId}") { inclusive = true } }
+                },
+                onBack = { nav.popBackStack() },
             )
         }
         composable("timetable") { TimetableScreen(me = me, onBack = { nav.popBackStack() }) }
@@ -63,10 +105,29 @@ fun MainNav(me: Profile, onProfileSaved: (Profile) -> Unit, openGroup: String? =
             )
         }
         composable("profile") {
-            ProfileScreen(userId = me.id, existing = me, onSaved = {
-                onProfileSaved(it)
-                nav.popBackStack()
-            })
+            ProfileScreen(
+                userId = me.id,
+                existing = me,
+                onSaved = {
+                    onProfileSaved(it)
+                    nav.popBackStack()
+                },
+                onBack = { nav.popBackStack() },
+            )
         }
     }
+}
+
+@Composable
+private fun OpenDm(userId: String, onOpened: (String) -> Unit, onBack: () -> Unit) {
+    val context = LocalContext.current
+    LaunchedEffect(userId) {
+        runCatching { context.container.chat.openDm(userId) }
+            .onSuccess { onOpened(it.id) }
+            .onFailure {
+                Toast.makeText(context, it.friendly(), Toast.LENGTH_LONG).show()
+                onBack()
+            }
+    }
+    Loading()
 }

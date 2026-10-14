@@ -37,7 +37,9 @@ class GngApp : Application() {
             }
 
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
-            override fun onActivityResumed(activity: Activity) = Unit
+            // When any screen comes back to the front (for example from Android's install-permission page),
+            // let a waiting update carry on.
+            override fun onActivityResumed(activity: Activity) = container.updates.onAppResumed()
             override fun onActivityPaused(activity: Activity) = Unit
             override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
             override fun onActivityDestroyed(activity: Activity) = Unit

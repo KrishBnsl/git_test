@@ -309,7 +309,7 @@ class ChatRepository(
         client.from("calls").select { filter { eq("id", id) } }.decodeSingleOrNull()
 
     suspend fun openDm(otherUserId: String): Group =
-        client.postgrest.rpc("open_dm", buildJsonObject { put("other", otherUserId) }).decodeAs()
+        client.postgrest.rpc("open_direct_chat", buildJsonObject { put("p_other", otherUserId) }).decodeAs()
 
     /** Everyone I share a gang with (RLS only returns those), for starting a DM. */
     suspend fun people(myId: String): List<Profile> =

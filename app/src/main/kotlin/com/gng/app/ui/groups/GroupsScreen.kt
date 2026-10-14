@@ -1,8 +1,6 @@
 package com.gng.app.ui.groups
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -10,58 +8,86 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
-import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
-import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.gng.app.container
 import androidx.compose.ui.text.input.KeyboardCapitalization
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.gng.app.data.Group
 import com.gng.app.AppContainer
 import com.gng.app.data.Conversation
+import com.gng.app.data.parseInstant
+import com.gng.app.ui.components.Avatar
+import com.gng.app.ui.dm.NewMessageSheet
+import com.gng.app.ui.dm.inboxTime
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.debounce
 import com.gng.app.data.Profile
-import com.gng.app.ui.components.BouncyButton
-import com.gng.app.ui.components.EmojiStrip
+import com.gng.app.ui.components.Choice
 import com.gng.app.ui.components.EmptyState
-import com.gng.app.ui.components.ErrorBanner
-import com.gng.app.ui.components.EmojiAvatar
-import com.gng.app.ui.chat.ChatViewModel
-import com.gng.app.ui.theme.LocalIsDark
-import com.gng.app.ui.theme.friendColor
-import com.gng.app.ui.components.GROUP_EMOJIS
+import com.gng.app.ui.components.GngIcon
+import com.gng.app.ui.components.GroupAvatar
+import com.gng.app.ui.components.GngSheet
+import com.gng.app.ui.components.IconPicker
+import com.gng.app.ui.components.InfoChip
+import com.gng.app.ui.components.Loading
+import com.gng.app.ui.components.SegmentedChoice
 import com.gng.app.ui.friendly
 import com.gng.app.ui.gngViewModel
+import com.gng.app.ui.icons.GngIcons
+import com.gng.app.ui.icons.GroupIcons
+import com.gng.app.ui.update.UpdateActions
+import com.gng.app.ui.update.actions
+import com.gng.app.ui.update.UpdateCard
+import com.gng.app.update.UpdateState
 import com.gng.core.InviteCodes
-import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 
-data class ConversationRow(val conversation: Conversation, val title: String, val emoji: String, val preview: String)
+/** One line of the home list: a gang or a DM, with what to show for it. */
+data class ConversationRow(
+    val conversation: Conversation,
+    val title: String,
+    val preview: String,
+    /** The other person, for DMs. */
+    val other: Profile? = null,
+)
 
 @OptIn(kotlinx.coroutines.FlowPreview::class)
 class GroupsViewModel(private val c: AppContainer, private val me: Profile) : ViewModel() {
@@ -69,26 +95,34 @@ class GroupsViewModel(private val c: AppContainer, private val me: Profile) : Vi
         private set
     var people by mutableStateOf<List<Profile>>(emptyList())
         private set
+    var refreshing by mutableStateOf(false)
+        private set
     var error by mutableStateOf<String?>(null)
         private set
     var busy by mutableStateOf(false)
         private set
+
+    private val profileCache = mutableMapOf<String, Profile>()
+    private val markedDelivered = mutableMapOf<String, Long>()
 
     init {
         viewModelScope.launch {
             c.chat.cachedConversations()?.let { rows = build(it) }
             refresh()
         }
-        // Keep the list live: any new message anywhere refreshes order, previews and badges.
+        // Keep the list live: a new message anywhere refreshes order, previews and badges.
         viewModelScope.launch {
             while (true) {
                 runCatching { c.chat.anyMessage().debounce(400).collect { refresh() } }
-                kotlinx.coroutines.delay(5_000)
+                delay(5_000)
             }
         }
     }
 
+    fun dismissError() { error = null }
+
     fun refresh() = viewModelScope.launch {
+        refreshing = rows == null
         runCatching { c.chat.conversations() }
             .onSuccess { list ->
                 rows = build(list)
@@ -103,39 +137,37 @@ class GroupsViewModel(private val c: AppContainer, private val me: Profile) : Vi
                 }
             }
             .onFailure { error = it.friendly(); if (rows == null) rows = emptyList() }
+        refreshing = false
     }
 
     private suspend fun build(list: List<Conversation>): List<ConversationRow> = list.map { conv ->
         val members = c.chat.cachedMembers(conv.id).orEmpty().associate { it.userId to it.profiles }
-        val other = conv.otherUserId?.let { members[it] ?: profileCache[it] ?: runCatching { c.profiles.get(it) }.getOrNull()?.also { p -> profileCache[it] = p } }
-        val title = if (conv.isDm) other?.displayName ?: "DM" else conv.name
-        val emoji = if (conv.isDm) other?.emoji ?: "💬" else conv.emoji
-        ConversationRow(conv, title, emoji, preview(conv, members))
+        val other = conv.otherUserId?.takeIf { conv.isDm }?.let { id ->
+            members[id] ?: profileCache[id] ?: runCatching { c.profiles.get(id) }.getOrNull()?.also { profileCache[id] = it }
+        }
+        ConversationRow(conv, if (conv.isDm) other?.displayName ?: "Direct message" else conv.name, preview(conv, members), other)
     }
 
-    private val profileCache = mutableMapOf<String, Profile>()
-    private val markedDelivered = mutableMapOf<String, Long>()
-
     private suspend fun preview(conv: Conversation, members: Map<String, Profile>): String {
-        val id = conv.lastMessageId ?: return if (conv.isDm) "Say hi 👋" else "code ${conv.inviteCode}"
+        val id = conv.lastMessageId ?: return if (conv.isDm) "Say hi" else "No messages yet"
         val who = when (conv.lastMessageUserId) {
             null -> ""
             me.id -> "You: "
-            else -> if (conv.isDm) "" else (members[conv.lastMessageUserId]?.displayName?.let { "$it: " } ?: "")
+            else -> if (conv.isDm) "" else members[conv.lastMessageUserId]?.displayName?.substringBefore(' ')?.let { "$it: " } ?: ""
         }
         if (conv.lastMessageKind != "text") return conv.lastMessageBody.orEmpty()
         // Message text is encrypted on the server; show it only if this phone has already decrypted it.
-        val cached = c.cache.get(id)
-        return who + (cached?.payload?.preview()?.takeIf { cached.payload.t != "locked" } ?: conv.lastMessageBody ?: "🔒 New message")
+        val cached = c.cache.get(id)?.payload?.takeIf { it.t != "locked" }
+        return who + (cached?.preview() ?: conv.lastMessageBody ?: "New message")
     }
 
     fun loadPeople() = viewModelScope.launch {
         runCatching { c.chat.people(me.id) }.onSuccess { people = it }.onFailure { error = it.friendly() }
     }
 
-    fun openDm(person: Profile, onDone: (Group) -> Unit) = act(onDone) { c.chat.openDm(person.id) }
+    fun openDm(userId: String, onDone: (Group) -> Unit) = act(onDone) { c.chat.openDm(userId) }
 
-    fun create(name: String, emoji: String, onDone: (Group) -> Unit) = act(onDone) { c.groups.create(name, emoji) }
+    fun create(name: String, icon: String, onDone: (Group) -> Unit) = act(onDone) { c.groups.create(name, icon) }
 
     fun join(code: String, onDone: (Group) -> Unit) = act(onDone) { c.groups.join(code) }
 
@@ -152,179 +184,235 @@ class GroupsViewModel(private val c: AppContainer, private val me: Profile) : Vi
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GroupsScreen(me: Profile, onOpen: (Group) -> Unit, onSettings: () -> Unit) {
     val vm = gngViewModel { GroupsViewModel(it, me) }
-    LifecycleResumeEffect(Unit) {
-        vm.refresh()
-        onPauseOrDispose { }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.refresh() }
+    var sheet by remember { mutableStateOf<GangSheetMode?>(null) }
+    var picker by remember { mutableStateOf(false) }
+
+    val updates = LocalContext.current.container.updates
+    val updateState by updates.state.collectAsStateWithLifecycle()
+    GroupsContent(
+        updateState = updateState, updateActions = updates.actions(),
+        me = me, rows = vm.rows, refreshing = vm.refreshing, error = vm.error, onDismissError = vm::dismissError,
+        onRefresh = { vm.refresh() }, onOpen = { onOpen(it.conversation.toGroup()) }, onSettings = onSettings,
+        onNewMessage = { vm.loadPeople(); picker = true },
+        onStart = { sheet = GangSheetMode.Start }, onJoin = { sheet = GangSheetMode.Join },
+    )
+
+    sheet?.let { mode ->
+        NewGangSheet(
+            initial = mode, busy = vm.busy, error = vm.error,
+            onDismiss = { sheet = null; vm.dismissError() },
+            onCreate = { name, icon -> vm.create(name, icon) { sheet = null; onOpen(it) } },
+            onJoin = { code -> vm.join(code) { sheet = null; onOpen(it) } },
+        )
     }
-    var dialog by remember { mutableStateOf<String?>(null) } // "create" | "join" | "dm"
-    val dark = LocalIsDark.current
+    if (picker) {
+        NewMessageSheet(vm.people, onDismiss = { picker = false }) { userId ->
+            vm.openDm(userId) { picker = false; onOpen(it) }
+        }
+    }
+}
+
+enum class GangSheetMode { Start, Join }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun GroupsContent(
+    me: Profile,
+    rows: List<ConversationRow>?,
+    refreshing: Boolean,
+    error: String?,
+    onDismissError: () -> Unit,
+    onRefresh: () -> Unit,
+    onOpen: (ConversationRow) -> Unit,
+    onSettings: () -> Unit,
+    onNewMessage: () -> Unit,
+    onStart: () -> Unit,
+    onJoin: () -> Unit,
+    updateState: UpdateState = UpdateState.Idle,
+    updateActions: UpdateActions = UpdateActions(),
+) {
+    val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val snackbar = remember { SnackbarHostState() }
+    // Sheet errors show inside the sheet; list errors show as a snackbar.
+    LaunchedEffect(error, rows) {
+        if (error != null && rows != null && rows.isEmpty()) {
+            snackbar.showSnackbar(error)
+            onDismissError()
+        }
+    }
 
     Scaffold(
+        modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
-            TopAppBar(
-                title = { Text("hey ${me.displayName} ${me.emoji}") },
-                actions = { IconButton(onClick = onSettings) { Icon(Icons.Filled.Settings, "Settings") } },
+            LargeTopAppBar(
+                title = { Text("Hey, ${me.displayName.substringBefore(' ')}") },
+                actions = {
+                    IconButton(onClick = onNewMessage) { GngIcon(GngIcons.AddComment, "New message") }
+                    IconButton(onClick = onSettings) { Avatar(me.displayName, me.avatarUrl, size = 36.dp, colorKey = me.id) }
+                },
+                scrollBehavior = scroll,
             )
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = { vm.loadPeople(); dialog = "dm" },
-                icon = { Text("✉️", fontSize = 18.sp) },
-                text = { Text("New DM") },
-            )
+            if (!rows.isNullOrEmpty()) {
+                ExtendedFloatingActionButton(
+                    onClick = onStart,
+                    icon = { GngIcon(GngIcons.Add, null) },
+                    text = { Text("New gang") },
+                )
+            }
         },
     ) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(bottom = 88.dp)) {
-            item {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    BouncyButton("➕ New gang", { dialog = "create" }, Modifier.weight(1f))
-                    BouncyButton(
-                        "🔑 Join with code", { dialog = "join" }, Modifier.weight(1f),
-                        container = MaterialTheme.colorScheme.secondary,
-                        content = MaterialTheme.colorScheme.onSecondary,
+        Column(Modifier.padding(padding)) {
+        UpdateCard(updateState, updateActions, Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+        PullToRefreshBox(isRefreshing = refreshing, onRefresh = onRefresh, modifier = Modifier.weight(1f)) {
+            when {
+                rows == null -> Loading()
+                rows.isEmpty() -> Column(
+                    Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    EmptyState(
+                        GngIcons.Groups, "No gangs yet",
+                        "Start one and share the code in your WhatsApp group, or join a friend's.",
+                        action = {
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Button(onClick = onStart) { Text("Start a gang") }
+                                OutlinedButton(onClick = onJoin) { Text("Join with code") }
+                            }
+                        },
                     )
                 }
-                ErrorBanner(vm.error, Modifier.padding(horizontal = 16.dp))
-            }
-            val rows = vm.rows
-            if (rows != null && rows.isEmpty()) {
-                item { EmptyState("🦗", "No gangs yet", "Start one and drop the code in your WhatsApp group.") }
-            }
-            items(rows.orEmpty(), key = { it.conversation.id }) { row ->
-                ConversationItem(row, dark) { onOpen(row.conversation.toGroup()) }
-            }
-        }
-    }
-
-    when (dialog) {
-        "create" -> CreateDialog(busy = vm.busy, error = vm.error, onDismiss = { dialog = null }) { name, emoji ->
-            vm.create(name, emoji) { dialog = null; onOpen(it) }
-        }
-        "join" -> JoinDialog(busy = vm.busy, error = vm.error, onDismiss = { dialog = null }) { code ->
-            vm.join(code) { dialog = null; onOpen(it) }
-        }
-        "dm" -> PeopleDialog(vm.people, busy = vm.busy, onDismiss = { dialog = null }) { person ->
-            vm.openDm(person) { dialog = null; onOpen(it) }
-        }
-    }
-}
-
-@Composable
-private fun ConversationItem(row: ConversationRow, dark: Boolean, onClick: () -> Unit) {
-    val conv = row.conversation
-    val unread = conv.unreadCount > 0
-    Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        EmojiAvatar(row.emoji, if (conv.isDm) friendColor(conv.otherUserId.orEmpty(), dark) else MaterialTheme.colorScheme.primaryContainer, 52.dp)
-        Column(Modifier.weight(1f).padding(start = 14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    row.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    fontWeight = if (unread) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.weight(1f, fill = false),
-                )
-                if (conv.isMuted) Text(" 🔕", fontSize = 12.sp)
-            }
-            Text(
-                row.preview, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                color = if (unread) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-        Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(start = 8.dp)) {
-            conv.lastMessageAt?.let { Text(ChatViewModel.shortTime(it), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            if (unread) {
-                Badge(
-                    containerColor = if (conv.isMuted) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(top = 4.dp),
-                ) { Text(if (conv.unreadCount > 99) "99+" else conv.unreadCount.toString()) }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PeopleDialog(people: List<Profile>, busy: Boolean, onDismiss: () -> Unit, onPick: (Profile) -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Message someone") },
-        text = {
-            if (people.isEmpty()) {
-                Text("People from your gangs show up here.")
-            } else {
-                LazyColumn(Modifier.height(360.dp)) {
-                    items(people, key = { it.id }) { p ->
-                        Row(
-                            Modifier.fillMaxWidth().clickable(enabled = !busy) { onPick(p) }.padding(vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(p.emoji, fontSize = 26.sp)
-                            Column(Modifier.padding(start = 12.dp)) {
-                                Text(p.displayName, style = MaterialTheme.typography.bodyLarge)
-                                listOfNotNull(p.branch, p.year?.let { "Year $it" }).takeIf { it.isNotEmpty() }?.let {
-                                    Text(it.joinToString(" · "), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            }
+                else -> LazyColumn(
+                    Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    items(rows, key = { it.conversation.id }) { row -> ConversationCard(row, onClick = { onOpen(row) }) }
+                    item {
+                        OutlinedButton(onClick = onJoin, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                            GngIcon(GngIcons.Key, null, size = 18.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Join with a code")
                         }
+                        Spacer(Modifier.height(96.dp)) // room for the FAB
                     }
                 }
             }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
-    )
+        }
+        }
+    }
 }
 
 @Composable
-private fun CreateDialog(busy: Boolean, error: String?, onDismiss: () -> Unit, onCreate: (String, String) -> Unit) {
-    var name by remember { mutableStateOf("") }
-    var emoji by remember { mutableStateOf(GROUP_EMOJIS.first()) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Start a gang") },
-        text = {
-            Column {
-                EmojiStrip(GROUP_EMOJIS, emoji) { emoji = it }
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    name, { name = it.take(40) }, label = { Text("Name") }, singleLine = true,
-                    placeholder = { Text("Hostel H4 Maggi Club") },
-                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
-                    modifier = Modifier.fillMaxWidth(),
+private fun ConversationCard(row: ConversationRow, onClick: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    val conv = row.conversation
+    val unread = conv.unreadCount > 0
+    Card(
+        onClick = onClick,
+        colors = CardDefaults.cardColors(containerColor = scheme.surfaceContainer),
+        shape = MaterialTheme.shapes.large,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (conv.isDm) Avatar(row.title, row.other?.avatarUrl, size = 56.dp, colorKey = conv.otherUserId ?: conv.id)
+            else GroupAvatar(conv.emoji, conv.photoUrl, size = 56.dp)
+            Column(Modifier.padding(horizontal = 16.dp).weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        row.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        fontWeight = if (unread) FontWeight.ExtraBold else null, modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (conv.isMuted) {
+                        Spacer(Modifier.width(6.dp))
+                        GngIcon(GngIcons.NotificationsOff, "Muted", size = 16.dp, tint = scheme.onSurfaceVariant)
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    row.preview,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (unread) scheme.onSurface else scheme.onSurfaceVariant,
+                    fontWeight = if (unread) FontWeight.SemiBold else null,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
-                ErrorBanner(error, Modifier.padding(top = 8.dp))
             }
-        },
-        confirmButton = {
-            TextButton(enabled = name.isNotBlank() && !busy, onClick = { onCreate(name.trim(), emoji) }) { Text("Create") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Nah") } },
-    )
+            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                conv.lastMessageAt?.let {
+                    Text(
+                        inboxTime(parseInstant(it)), style = MaterialTheme.typography.labelSmall,
+                        color = if (unread) scheme.primary else scheme.onSurfaceVariant,
+                    )
+                }
+                if (unread) {
+                    Badge(containerColor = if (conv.isMuted) scheme.outline else scheme.primary) {
+                        Text(if (conv.unreadCount > 99) "99+" else conv.unreadCount.toString())
+                    }
+                } else {
+                    Spacer(Modifier.height(16.dp))
+                }
+            }
+        }
+    }
 }
 
 @Composable
-private fun JoinDialog(busy: Boolean, error: String?, onDismiss: () -> Unit, onJoin: (String) -> Unit) {
+fun NewGangSheet(
+    initial: GangSheetMode,
+    busy: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onCreate: (name: String, icon: String) -> Unit,
+    onJoin: (code: String) -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    var mode by remember { mutableStateOf(initial) }
+    var name by remember { mutableStateOf("") }
+    var icon by remember { mutableStateOf(GroupIcons.default.key) }
     var code by remember { mutableStateOf("") }
     val normalized = InviteCodes.normalize(code)
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Got a code?") },
-        text = {
-            Column {
-                OutlinedTextField(
-                    code, { code = it.take(12) }, label = { Text("6-character code") }, singleLine = true,
-                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
-                )
-                ErrorBanner(error, Modifier.padding(top = 8.dp))
-            }
-        },
-        confirmButton = {
-            TextButton(enabled = normalized != null && !busy, onClick = { normalized?.let(onJoin) }) { Text("Join") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
+
+    GngSheet(title = if (mode == GangSheetMode.Start) "Start a gang" else "Join a gang", onDismiss = onDismiss) {
+        SegmentedChoice(
+            choices = listOf(
+                Choice(GangSheetMode.Start, "Start new", GngIcons.Add),
+                Choice(GangSheetMode.Join, "Join with code", GngIcons.Key),
+            ),
+            selected = mode, onSelect = { mode = it }, checkIcon = GngIcons.Check,
+        )
+        Spacer(Modifier.height(20.dp))
+        if (mode == GangSheetMode.Start) {
+            IconPicker(GroupIcons, icon) { icon = it }
+            Spacer(Modifier.height(16.dp))
+            OutlinedTextField(
+                name, { name = it.take(40) }, label = { Text("Name") }, placeholder = { Text("Hostel H4 Maggi Club") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        } else {
+            OutlinedTextField(
+                code, { code = it.take(12) }, label = { Text("6-character code") },
+                leadingIcon = { GngIcon(GngIcons.Key, null) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        if (error != null) {
+            Text(error, color = scheme.error, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 12.dp))
+        }
+        Spacer(Modifier.height(24.dp))
+        Button(
+            enabled = !busy && if (mode == GangSheetMode.Start) name.isNotBlank() else normalized != null,
+            onClick = { if (mode == GangSheetMode.Start) onCreate(name.trim(), icon) else normalized?.let(onJoin) },
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+        ) { Text(if (mode == GangSheetMode.Start) "Create gang" else "Join gang") }
+    }
 }

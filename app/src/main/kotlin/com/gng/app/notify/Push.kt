@@ -85,7 +85,7 @@ class Inbox(private val c: AppContainer) {
         val title = when {
             conversation == null -> "gng"
             isDm -> sender?.displayName ?: "DM"
-            else -> "${conversation.emoji} ${conversation.name}"
+            else -> conversation.name
         }
         val text = if (c.settings.previews.first()) {
             if (m.payload.t == "event") m.payload.text.orEmpty() else m.payload.preview()
@@ -94,7 +94,7 @@ class Inbox(private val c: AppContainer) {
         }
         val senderName = when {
             m.userId == null -> "gng"
-            c.settings.previews.first() -> sender?.let { "${it.emoji} ${it.displayName}" } ?: "Someone"
+            c.settings.previews.first() -> sender?.displayName ?: "Someone"
             else -> "Someone"
         }
         c.notifier.showMessage(groupId, title, isDm, senderName, text, messageId, myName)
@@ -106,8 +106,8 @@ class Inbox(private val c: AppContainer) {
         val conversation = (c.chat.cachedConversations() ?: runCatching { c.chat.conversations() }.getOrNull())
             ?.firstOrNull { it.id == call.groupId }
         val caller = runCatching { c.profiles.get(call.startedBy) }.getOrNull()
-        val callerName = caller?.let { "${it.emoji} ${it.displayName}" } ?: "Someone"
-        val title = if (conversation == null || conversation.isDm) callerName else "${conversation.emoji} ${conversation.name}"
+        val callerName = caller?.displayName ?: "Someone"
+        val title = if (conversation == null || conversation.isDm) callerName else conversation.name
         if (!c.calls.ring(call, title, callerName, isDm = conversation?.isDm != false)) return
         if (c.foreground) {
             // App is open: go straight to the ringing screen.
@@ -189,7 +189,7 @@ class NotificationActions : BroadcastReceiver() {
         runCatching { c.chat.markSeen(groupId, lastId, if (c.settings.readReceipts.first()) lastId else null) }
         val conversation = c.chat.cachedConversations()?.firstOrNull { it.id == groupId }
         val myName = runCatching { c.profiles.get(me)?.displayName }.getOrNull() ?: "You"
-        val title = conversation?.let { if (it.isDm) "DM" else "${it.emoji} ${it.name}" } ?: "gng"
+        val title = conversation?.let { if (it.isDm) "Direct message" else it.name } ?: "gng"
         c.notifier.appendMyReply(groupId, title, conversation?.isDm == true, myName, text)
     }
 

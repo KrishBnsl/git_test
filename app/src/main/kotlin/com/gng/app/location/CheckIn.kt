@@ -63,7 +63,7 @@ class CheckIn(
         val here = currentLatLng() ?: return Result.NoFix
 
         val zones = locations.zonesVisibleToMe().map {
-            CampusZone(it.id, it.name, it.emoji, LatLng(it.lat, it.lng), it.radiusM)
+            CampusZone(it.id, it.name, it.icon, LatLng(it.lat, it.lng), it.radiusM)
         }
         val zone = Geo.resolveZone(here, zones)
         if (mode == SharingMode.Live) {

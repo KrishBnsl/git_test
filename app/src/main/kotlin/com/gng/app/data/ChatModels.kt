@@ -51,7 +51,9 @@ data class ReadState(
 data class Conversation(
     val id: String,
     val name: String,
+    /** Icon key for gangs (the column is called `emoji` for history). */
     val emoji: String,
+    @SerialName("photo_url") val photoUrl: String? = null,
     val kind: String = "gang",
     @SerialName("invite_code") val inviteCode: String,
     @SerialName("created_by") val createdBy: String,
@@ -66,7 +68,7 @@ data class Conversation(
 ) {
     val isDm get() = kind == "dm"
     val isMuted get() = mutedUntil?.let { parseInstant(it).isAfter(Instant.now()) } ?: false
-    fun toGroup() = Group(id, name, emoji, inviteCode, createdBy, kind)
+    fun toGroup() = Group(id = id, name = name, icon = emoji, inviteCode = inviteCode, createdBy = createdBy, photoUrl = photoUrl, kind = kind)
 }
 
 @Serializable

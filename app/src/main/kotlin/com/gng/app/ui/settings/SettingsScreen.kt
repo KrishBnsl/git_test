@@ -1,22 +1,26 @@
 package com.gng.app.ui.settings
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Icon
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -27,92 +31,227 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.gng.app.BuildConfig
 import com.gng.app.container
 import com.gng.app.data.Profile
 import com.gng.app.data.SharingMode
 import com.gng.app.data.ThemeMode
-import com.gng.app.ui.components.ChipRow
-import com.gng.app.ui.components.EmojiAvatar
-import com.gng.app.ui.components.FunCard
+import com.gng.app.ui.components.Avatar
+import com.gng.app.ui.components.Choice
+import com.gng.app.ui.components.GngIcon
 import com.gng.app.ui.components.SectionHeader
+import com.gng.app.ui.components.SegmentedChoice
+import com.gng.app.ui.icons.GngIcons
+import com.gng.app.ui.theme.DynamicColorSupported
+import com.gng.app.ui.update.UpdateActions
+import com.gng.app.ui.update.actions
+import com.gng.app.ui.update.UpdateCard
+import com.gng.app.update.UpdateState
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(me: Profile, onEditProfile: () -> Unit, onTimetable: () -> Unit, onBack: () -> Unit) {
     val c = LocalContext.current.container
     val theme by c.settings.theme.collectAsStateWithLifecycle(ThemeMode.System)
+    val dynamic by c.settings.dynamicColor.collectAsStateWithLifecycle(true)
     val scope = rememberCoroutineScope()
 
+    val updates = c.updates
+    val updateState by updates.state.collectAsStateWithLifecycle()
+    val push by c.settings.push.collectAsStateWithLifecycle(true)
+    val previews by c.settings.previews.collectAsStateWithLifecycle(true)
+    val receipts by c.settings.readReceipts.collectAsStateWithLifecycle(true)
+    SettingsContent(
+        privacy = PrivacySettings(
+            pushAvailable = c.push.available, push = push, previews = previews, readReceipts = receipts,
+            onPush = { scope.launch { c.settings.setPush(it) } },
+            onPreviews = { scope.launch { c.settings.setPreviews(it) } },
+            onReadReceipts = { scope.launch { c.settings.setReadReceipts(it) } },
+        ),
+        updateState = updateState, updateActions = updates.actions(),
+        currentVersion = updates.currentVersion, updatesEnabled = updates.enabled,
+        me = me, theme = theme, dynamicColor = dynamic,
+        onTheme = { scope.launch { c.settings.setTheme(it) } },
+        onDynamicColor = { scope.launch { c.settings.setDynamicColor(it) } },
+        onEditProfile = onEditProfile, onTimetable = onTimetable, onBack = onBack,
+        onLogout = {
+            scope.launch {
+                // Stop sharing before logging out so nobody sees a stale spot,
+                // stop pushes to this phone, and forget the decrypted message cache.
+                runCatching { c.checkIn.setMode(SharingMode.Off) }
+                runCatching { c.push.unregister() }
+                c.cache.wipe()
+                c.auth.signOut()
+            }
+        },
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsContent(
+    me: Profile,
+    theme: ThemeMode,
+    dynamicColor: Boolean,
+    onTheme: (ThemeMode) -> Unit,
+    onDynamicColor: (Boolean) -> Unit,
+    onEditProfile: () -> Unit,
+    onTimetable: () -> Unit,
+    onBack: () -> Unit,
+    onLogout: () -> Unit,
+    updateState: UpdateState = UpdateState.Idle,
+    updateActions: UpdateActions = UpdateActions(),
+    currentVersion: String = BuildConfig.VERSION_NAME,
+    updatesEnabled: Boolean = true,
+    privacy: PrivacySettings = PrivacySettings(),
+) {
+    val scheme = MaterialTheme.colorScheme
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Settings") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+                navigationIcon = { IconButton(onClick = onBack) { GngIcon(GngIcons.ArrowBack, "Back") } },
             )
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
-            FunCard {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    EmojiAvatar(me.emoji, MaterialTheme.colorScheme.primaryContainer, 56.dp)
-                    Column(Modifier.padding(start = 16.dp).weight(1f)) {
+        Column(
+            Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+        ) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = scheme.surfaceContainer),
+                shape = MaterialTheme.shapes.large,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Avatar(me.displayName, me.avatarUrl, size = 64.dp, colorKey = me.id)
+                    Column(Modifier.padding(horizontal = 16.dp).weight(1f)) {
                         Text(me.displayName, style = MaterialTheme.typography.titleLarge)
-                        Text(listOfNotNull(me.branch, me.year?.let { "Year $it" }).joinToString(" · "))
+                        val line = listOfNotNull(me.branch, me.year?.let { "Year $it" }).joinToString(" · ")
+                        if (line.isNotBlank()) {
+                            Text(line, style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant)
+                        }
                     }
-                    OutlinedButton(onClick = onEditProfile) { Text("Edit") }
+                    FilledTonalButton(onClick = onEditProfile) { Text("Edit") }
                 }
             }
-            SectionHeader("Theme")
-            ChipRow {
-                FilterChip(theme == ThemeMode.System, { scope.launch { c.settings.setTheme(ThemeMode.System) } }, label = { Text("📱 System") })
-                FilterChip(theme == ThemeMode.Light, { scope.launch { c.settings.setTheme(ThemeMode.Light) } }, label = { Text("☀️ Playful") })
-                FilterChip(theme == ThemeMode.Dark, { scope.launch { c.settings.setTheme(ThemeMode.Dark) } }, label = { Text("🌚 Neon") })
-            }
-            SectionHeader("Notifications & privacy")
-            val push by c.settings.push.collectAsStateWithLifecycle(true)
-            val previews by c.settings.previews.collectAsStateWithLifecycle(true)
-            val receipts by c.settings.readReceipts.collectAsStateWithLifecycle(true)
-            SettingSwitch(
-                "🔔 Push notifications",
-                if (c.push.available) "Messages and calls, even when gng is closed" else "Not set up in this build (needs Firebase, see docs/SETUP.md)",
-                push && c.push.available,
-                enabled = c.push.available,
-            ) { scope.launch { c.settings.setPush(it) } }
-            SettingSwitch("👀 Message previews", "Show who said what in notifications", previews) { scope.launch { c.settings.setPreviews(it) } }
-            SettingSwitch("✔️ Send read receipts", "When off, people see Delivered but not Read", receipts) { scope.launch { c.settings.setReadReceipts(it) } }
-            Text(
-                "🔒 Messages, photos, files, stickers and reactions are end-to-end encrypted. Calls are peer-to-peer encrypted.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(vertical = 8.dp),
+
+            SectionHeader("Appearance")
+            SegmentedChoice(
+                choices = listOf(
+                    Choice(ThemeMode.System, "Auto", GngIcons.BrightnessAuto),
+                    Choice(ThemeMode.Light, "Light", GngIcons.LightMode),
+                    Choice(ThemeMode.Dark, "Dark", GngIcons.DarkMode),
+                ),
+                selected = theme, onSelect = onTheme, checkIcon = GngIcons.Check,
             )
-            SectionHeader("Stuff")
-            OutlinedButton(onClick = onTimetable, modifier = Modifier.fillMaxWidth()) { Text("🗓️ My classes") }
-            OutlinedButton(
-                onClick = {
-                    scope.launch {
-                        // Stop sharing before logging out so nobody sees a stale spot,
-                        // and stop pushes to this phone.
-                        runCatching { c.checkIn.setMode(SharingMode.Off) }
-                        runCatching { c.push.unregister() }
-                        c.cache.wipe()
-                        c.auth.signOut()
-                    }
+            Spacer(Modifier.height(8.dp))
+            ListItem(
+                colors = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
+                leadingContent = { GngIcon(GngIcons.Palette, null) },
+                headlineContent = { Text("Dynamic colour") },
+                supportingContent = {
+                    Text(
+                        if (DynamicColorSupported) "Match your wallpaper, like the rest of Android"
+                        else "Needs Android 12 or newer",
+                    )
                 },
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("👋 Log out") }
+                trailingContent = {
+                    Switch(
+                        checked = dynamicColor && DynamicColorSupported,
+                        onCheckedChange = onDynamicColor,
+                        enabled = DynamicColorSupported,
+                    )
+                },
+            )
+
+            SectionHeader("Notifications & privacy")
+            val clear = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent)
+            ListItem(
+                colors = clear,
+                leadingContent = { GngIcon(GngIcons.Notifications, null) },
+                headlineContent = { Text("Push notifications") },
+                supportingContent = {
+                    Text(
+                        if (privacy.pushAvailable) "Messages and calls, even when gng is closed"
+                        else "Not set up in this build (needs Firebase, see docs/SETUP.md)",
+                    )
+                },
+                trailingContent = {
+                    Switch(checked = privacy.push && privacy.pushAvailable, onCheckedChange = privacy.onPush, enabled = privacy.pushAvailable)
+                },
+            )
+            ListItem(
+                colors = clear,
+                leadingContent = { GngIcon(GngIcons.Visibility, null) },
+                headlineContent = { Text("Message previews") },
+                supportingContent = { Text("Show who said what in notifications") },
+                trailingContent = { Switch(checked = privacy.previews, onCheckedChange = privacy.onPreviews) },
+            )
+            ListItem(
+                colors = clear,
+                leadingContent = { GngIcon(GngIcons.DoneAll, null) },
+                headlineContent = { Text("Send read receipts") },
+                supportingContent = { Text("When off, people see Delivered but not Read") },
+                trailingContent = { Switch(checked = privacy.readReceipts, onCheckedChange = privacy.onReadReceipts) },
+            )
+            ListItem(
+                colors = clear,
+                leadingContent = { GngIcon(GngIcons.Encrypted, null, tint = scheme.primary) },
+                headlineContent = { Text("End-to-end encrypted") },
+                supportingContent = {
+                    Text("Messages, photos, files, stickers and reactions can only be read by the people in the chat. Calls are encrypted phone to phone.")
+                },
+            )
+
+            SectionHeader("You")
+            ListItem(
+                modifier = Modifier.clickable(onClick = onTimetable),
+                colors = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
+                leadingContent = { GngIcon(GngIcons.CalendarMonth, null) },
+                headlineContent = { Text("My classes") },
+                supportingContent = { Text("Your gang uses this to find lunch slots that work for everyone") },
+                trailingContent = { GngIcon(GngIcons.ChevronRight, null, tint = scheme.onSurfaceVariant) },
+            )
+            ListItem(
+                modifier = Modifier.clickable(onClick = onLogout),
+                colors = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
+                leadingContent = { GngIcon(GngIcons.Logout, null, tint = scheme.error) },
+                headlineContent = { Text("Log out", color = scheme.error) },
+            )
+            SectionHeader("About")
+            UpdateCard(updateState, updateActions)
+            val busy = updateState is UpdateState.Checking || updateState is UpdateState.Downloading
+            ListItem(
+                colors = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
+                leadingContent = { GngIcon(GngIcons.Info, null) },
+                headlineContent = { Text("gng $currentVersion") },
+                supportingContent = {
+                    Text(
+                        when {
+                            !updatesEnabled -> "Updates are switched off in test builds"
+                            updateState is UpdateState.Checking -> "Checking for updates…"
+                            updateState is UpdateState.UpToDate -> "You're on the latest version"
+                            updateState is UpdateState.Available -> "Version ${updateState.info.version} is available"
+                            else -> "Updates come from GitHub Releases"
+                        },
+                    )
+                },
+                trailingContent = {
+                    if (updatesEnabled) TextButton(onClick = updateActions.onCheck, enabled = !busy) { Text("Check") }
+                },
+            )
+            Spacer(Modifier.height(24.dp))
         }
     }
 }
 
-@Composable
-private fun SettingSwitch(title: String, subtitle: String, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Switch(checked = checked, onCheckedChange = onChange, enabled = enabled)
-    }
-}
+/** The notification and privacy switches; defaults are what a fresh install has. */
+data class PrivacySettings(
+    val pushAvailable: Boolean = true,
+    val push: Boolean = true,
+    val previews: Boolean = true,
+    val readReceipts: Boolean = true,
+    val onPush: (Boolean) -> Unit = {},
+    val onPreviews: (Boolean) -> Unit = {},
+    val onReadReceipts: (Boolean) -> Unit = {},
+)

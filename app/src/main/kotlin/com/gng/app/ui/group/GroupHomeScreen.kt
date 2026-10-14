@@ -1,92 +1,140 @@
 package com.gng.app.ui.group
 
 import android.content.Intent
-import android.content.pm.PackageManager
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.viewModelScope
 import com.gng.app.AppContainer
+import com.gng.app.data.Group
+import com.gng.app.data.GroupPermission
+import com.gng.app.data.GroupRole
+import com.gng.app.data.parseInstant
 import com.gng.app.call.CallActivity
 import com.gng.app.call.callPermissions
 import com.gng.app.crypto.IdentityKeys
-import com.gng.app.data.Group
-import com.gng.app.data.Profile
-import com.gng.app.data.parseInstant
 import com.gng.app.ui.chat.ChatScreen
+import com.gng.app.ui.components.Avatar
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.text.font.FontFamily
+import androidx.core.content.ContextCompat
+import java.time.Duration
+import java.time.Instant
+import com.gng.app.data.Profile
+import com.gng.app.ui.components.AvatarInfo
 import com.gng.app.ui.components.EmptyState
+import com.gng.app.ui.components.GroupAvatar
+import com.gng.app.ui.components.GngIcon
+import com.gng.app.ui.components.LocalSnackbar
 import com.gng.app.ui.components.Loading
 import com.gng.app.ui.friendly
 import com.gng.app.ui.gngViewModel
+import com.gng.app.ui.icons.GngIcons
 import kotlinx.coroutines.launch
-import java.time.Duration
-import java.time.Instant
 
-/** Everything the tabs share: the conversation and who's in it. */
-data class GroupContext(val group: Group, val me: Profile, val members: Map<String, Profile>) {
-    val isDm get() = group.isDm
+/** Everything the tabs share: the group and who's in it. */
+data class GroupContext(
+    val group: Group,
+    val me: Profile,
+    val members: Map<String, Profile>,
+    /** user id to "admin" or "member". */
+    val roles: Map<String, String> = emptyMap(),
+) {
+    val isAdmin: Boolean get() = roles[me.id] == GroupRole.ADMIN
+    val canEditGroup: Boolean get() = isAdmin || group.editPermission == GroupPermission.MEMBERS
+    val canSendMessages: Boolean get() = isAdmin || group.messagePermission == GroupPermission.EVERYONE
+    fun isAdmin(userId: String): Boolean = roles[userId] == GroupRole.ADMIN
+
+    /** A two-person direct message rather than a gang. */
+    val isDm: Boolean get() = group.isDm
+    /** In a DM, the other person. */
     val other: Profile? get() = if (isDm) members.values.firstOrNull { it.id != me.id } else null
-    val title: String get() = if (isDm) other?.let { "${it.emoji} ${it.displayName}" } ?: "DM" else "${group.emoji} ${group.name}"
-    fun nameOf(userId: String?) = members[userId]?.displayName ?: "someone"
-    fun emojiOf(userId: String?) = members[userId]?.emoji ?: "👤"
+    val title: String get() = if (isDm) other?.displayName ?: "Direct message" else group.name
+
+    fun nameOf(userId: String?): String = members[userId]?.displayName ?: "Someone"
+    fun person(userId: String?): AvatarInfo =
+        AvatarInfo(userId ?: "?", nameOf(userId), members[userId]?.avatarUrl)
 }
 
 class GroupHomeViewModel(private val c: AppContainer, private val groupId: String) : ViewModel() {
     var ctx by mutableStateOf<GroupContext?>(null)
         private set
     var error by mutableStateOf<String?>(null)
+        private set
+
+    private var watching = false
+
+    /** Reloads the gang whenever its row changes (photo, name, permissions), so everyone sees it live. */
+    fun watch(me: Profile) {
+        if (watching) return
+        watching = true
+        viewModelScope.launch {
+            runCatching { c.groups.changes(groupId).collect { load(me).join() } }
+        }
+    }
+
     var mutedUntil by mutableStateOf<Instant?>(null)
         private set
 
     fun load(me: Profile) = viewModelScope.launch {
-        // Open instantly from the cache, then refresh.
+        // Open instantly from the cache, then refresh from the server.
         val cachedConversation = c.chat.cachedConversations()?.firstOrNull { it.id == groupId }
-        val cachedMembers = c.chat.cachedMembers(groupId)
-        if (ctx == null && cachedConversation != null && cachedMembers != null) {
-            ctx = GroupContext(cachedConversation.toGroup(), me, cachedMembers.associate { it.userId to it.profiles })
+        if (ctx == null && cachedConversation != null) {
+            c.chat.cachedMembers(groupId)?.let { rows ->
+                ctx = GroupContext(cachedConversation.toGroup(), me, rows.associate { it.userId to it.profiles }, rows.associate { it.userId to it.role })
+            }
         }
-        mutedUntil = cachedConversation?.mutedUntil?.let(::parseInstant)?.takeIf { it.isAfter(Instant.now()) }
+        cachedConversation?.let { mutedUntil = it.mutedUntil?.let(::parseInstant)?.takeIf { t -> t.isAfter(Instant.now()) } }
         runCatching {
             val group = c.groups.get(groupId)
-            val members = c.groups.members(groupId)
-            c.chat.cacheMembers(groupId, members)
-            GroupContext(group, me, members.associate { it.userId to it.profiles })
+            val rows = c.groups.members(groupId)
+            c.chat.cacheMembers(groupId, rows)
+            GroupContext(group, me, rows.associate { it.userId to it.profiles }, rows.associate { it.userId to it.role })
         }.onSuccess { ctx = it; error = null }.onFailure { if (ctx == null) error = it.friendly() }
     }
 
@@ -109,11 +157,12 @@ class GroupHomeViewModel(private val c: AppContainer, private val groupId: Strin
             .onFailure { error = it.friendly() }
     }
 
-    fun call(video: Boolean, title: String) = viewModelScope.launch {
+    fun call(video: Boolean) = viewModelScope.launch {
+        val title = ctx?.title ?: return@launch
         runCatching { c.calls.start(groupId, title, video) }.onFailure { error = it.friendly() }
     }
 
-    /** The code both of you should see in a DM, if nobody's key was swapped. */
+    /** The code both people should see in a DM, if nobody's key was swapped. */
     suspend fun safetyCode(): String? {
         val other = ctx?.other ?: return null
         val theirs = runCatching { c.e2ee.publicKeyOf(other.id) }.getOrNull() ?: return null
@@ -121,20 +170,31 @@ class GroupHomeViewModel(private val c: AppContainer, private val groupId: Strin
     }
 }
 
-private enum class Tab(val emoji: String, val label: String) {
-    Chat("💬", "Hangout"), Plans("🍛", "Plans"), Squad("📍", "Squad"), Study("📚", "Study")
+enum class GroupTab(val label: String, val icon: Int, val iconSelected: Int) {
+    Chat("Chat", GngIcons.Forum, GngIcons.ForumFill),
+    Plans("Plans", GngIcons.Event, GngIcons.EventFill),
+    Map("Map", GngIcons.Map, GngIcons.MapFill),
+    Squad("Squad", GngIcons.Groups, GngIcons.GroupsFill),
+    Study("Study", GngIcons.School, GngIcons.SchoolFill),
 }
 
-private val FOREVER: Duration = Duration.ofDays(3650)
-
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GroupHomeScreen(groupId: String, me: Profile, onBack: () -> Unit, onTimetable: () -> Unit) {
+fun GroupHomeScreen(
+    groupId: String,
+    me: Profile,
+    onBack: () -> Unit,
+    onTimetable: () -> Unit,
+    onSettings: () -> Unit,
+    onMessage: (userId: String) -> Unit,
+) {
     val vm = gngViewModel(key = "group-$groupId") { GroupHomeViewModel(it, groupId) }
-    LaunchedEffect(groupId, me) { vm.load(me) }
-    var tab by rememberSaveable { mutableIntStateOf(0) }
-    var menu by remember { mutableStateOf(false) }
-    var confirmLeave by remember { mutableStateOf(false) }
+    LaunchedEffect(groupId, me) {
+        vm.load(me)
+        vm.watch(me)
+    }
+    // Coming back from group settings: pick up whatever changed.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.load(me) }
+    var tab by rememberSaveable { mutableIntStateOf(GroupTab.Chat.ordinal) }
     var safetyCode by remember { mutableStateOf<String?>(null) }
     var pendingCall by remember { mutableStateOf<Boolean?>(null) }
     val context = LocalContext.current
@@ -142,125 +202,53 @@ fun GroupHomeScreen(groupId: String, me: Profile, onBack: () -> Unit, onTimetabl
     val ctx = vm.ctx
 
     fun startCall(video: Boolean) {
-        val title = ctx?.title ?: return
-        vm.call(video, title)
+        vm.call(video)
         context.startActivity(CallActivity.intent(context, "", CallActivity.ACTION_SHOW))
     }
     val askCallPermissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
         val video = pendingCall ?: return@rememberLauncherForActivityResult
         pendingCall = null
-        if (granted.values.all { it }) startCall(video) else vm.error = "Calls need the microphone" + if (video) " and camera" else ""
-    }
-    fun requestCall(video: Boolean) {
-        val missing = callPermissions(video).filter { ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED }
-        if (missing.isEmpty()) startCall(video) else {
-            pendingCall = video
-            askCallPermissions.launch(missing.toTypedArray())
-        }
+        if (granted.values.all { it }) startCall(video)
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(ctx?.title ?: "…", maxLines = 1)
-                        if (vm.mutedUntil != null) Text("🔕 muted", style = MaterialTheme.typography.labelSmall)
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-                },
-                actions = {
-                    if (ctx != null) {
-                        IconButton(onClick = { requestCall(video = false) }) { Text("📞", fontSize = 20.sp) }
-                        IconButton(onClick = { requestCall(video = true) }) { Text("📹", fontSize = 20.sp) }
-                        if (!ctx.isDm) {
-                            IconButton(onClick = {
-                                val text = "Join ${ctx.group.emoji} ${ctx.group.name} on gng! Code: ${ctx.group.inviteCode}"
-                                context.startActivity(
-                                    Intent.createChooser(
-                                        Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text),
-                                        "Invite the gang",
-                                    ),
-                                )
-                            }) { Icon(Icons.Filled.Share, "Invite") }
-                        }
-                    }
-                    IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, "More") }
-                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                        if (vm.mutedUntil != null) {
-                            DropdownMenuItem(text = { Text("🔔 Unmute") }, onClick = { menu = false; vm.mute(null) })
-                        } else {
-                            DropdownMenuItem(text = { Text("🔕 Mute for 8 hours") }, onClick = { menu = false; vm.mute(Duration.ofHours(8)) })
-                            DropdownMenuItem(text = { Text("🔕 Mute for a week") }, onClick = { menu = false; vm.mute(Duration.ofDays(7)) })
-                            DropdownMenuItem(text = { Text("🔕 Mute always") }, onClick = { menu = false; vm.mute(FOREVER) })
-                        }
-                        if (ctx?.isDm == true) {
-                            DropdownMenuItem(text = { Text("🔐 Verify encryption") }, onClick = {
-                                menu = false
-                                scope.launch { safetyCode = vm.safetyCode() ?: "They haven't opened the new app yet, so there's no key to check." }
-                            })
-                        }
-                        DropdownMenuItem(text = { Text("🗓️ My classes") }, onClick = { menu = false; onTimetable() })
-                        DropdownMenuItem(
-                            text = { Text(if (ctx?.isDm == true) "🗑️ Delete chat" else "👋 Leave gang") },
-                            onClick = { menu = false; confirmLeave = true },
-                        )
-                    }
-                },
-            )
-        },
-        bottomBar = {
-            if (ctx != null && !ctx.isDm) {
-                NavigationBar {
-                    Tab.entries.forEachIndexed { i, t ->
-                        NavigationBarItem(
-                            selected = tab == i,
-                            onClick = { tab = i },
-                            icon = { Text(t.emoji, fontSize = 22.sp) },
-                            label = { Text(t.label) },
-                        )
-                    }
-                }
+    GroupScaffold(
+        ctx = ctx,
+        error = vm.error,
+        tab = GroupTab.entries[tab],
+        onTab = { tab = it.ordinal },
+        onBack = onBack,
+        onTimetable = onTimetable,
+        onSettings = onSettings,
+        onLeave = { vm.leave(onBack) },
+        mutedUntil = vm.mutedUntil,
+        onMute = vm::mute,
+        onCall = { video ->
+            val missing = callPermissions(video).filter { ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED }
+            if (missing.isEmpty()) startCall(video) else {
+                pendingCall = video
+                askCallPermissions.launch(missing.toTypedArray())
             }
         },
-    ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            when {
-                ctx == null && vm.error != null -> EmptyState("📡", "Couldn't load this chat", vm.error!!)
-                ctx == null -> Loading()
-                ctx.isDm -> ChatScreen(ctx)
-                else -> when (Tab.entries[tab]) {
-                    Tab.Chat -> ChatScreen(ctx)
-                    Tab.Plans -> PlansTab(ctx)
-                    Tab.Squad -> SquadTab(ctx, onTimetable)
-                    Tab.Study -> StudyTab(ctx)
-                }
+        onVerify = {
+            scope.launch { safetyCode = vm.safetyCode() ?: "They haven't opened the new version of gng yet, so there's no key to check." }
+        },
+    ) { current ->
+        if (ctx != null) {
+            when (if (ctx.isDm) GroupTab.Chat else current) {
+                GroupTab.Chat -> ChatScreen(ctx, onOpenEvent = { m -> tab = tabForEvent(m.kind).ordinal })
+                GroupTab.Plans -> PlansTab(ctx)
+                GroupTab.Map -> MapTab(ctx, onOpenSquad = { tab = GroupTab.Squad.ordinal }, onMessage = onMessage)
+                GroupTab.Squad -> SquadTab(ctx, onTimetable, onMessage)
+                GroupTab.Study -> StudyTab(ctx)
             }
         }
-    }
-
-    if (confirmLeave) {
-        val dm = ctx?.isDm == true
-        AlertDialog(
-            onDismissRequest = { confirmLeave = false },
-            title = { Text(if (dm) "Delete this chat?" else "Leave ${ctx?.group?.name ?: "this gang"}?") },
-            text = {
-                Text(
-                    if (dm) "It disappears from your list. If either of you messages again it comes back, without the old messages."
-                    else "You can rejoin later with the invite code. You won't be able to read messages from before you rejoin.",
-                )
-            },
-            confirmButton = { TextButton(onClick = { confirmLeave = false; vm.leave(onBack) }) { Text(if (dm) "Delete" else "Leave") } },
-            dismissButton = { TextButton(onClick = { confirmLeave = false }) { Text("Cancel") } },
-        )
     }
 
     safetyCode?.let { code ->
         AlertDialog(
             onDismissRequest = { safetyCode = null },
-            title = { Text("🔐 Safety code") },
+            icon = { GngIcon(GngIcons.VerifiedUser, null) },
+            title = { Text("Safety code") },
             text = {
                 Column {
                     Text("Compare this with ${ctx?.other?.displayName ?: "them"}, in person or on a call. If it matches on both phones, nobody is listening in.")
@@ -272,4 +260,190 @@ fun GroupHomeScreen(groupId: String, me: Profile, onBack: () -> Unit, onTimetabl
     }
 }
 
+private fun tabForEvent(kind: String): GroupTab = when (kind) {
+    "plan" -> GroupTab.Plans
+    else -> GroupTab.Study
+}
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun GroupScaffold(
+    ctx: GroupContext?,
+    error: String?,
+    tab: GroupTab,
+    onTab: (GroupTab) -> Unit,
+    onBack: () -> Unit,
+    onTimetable: () -> Unit,
+    onSettings: () -> Unit,
+    onLeave: () -> Unit,
+    mutedUntil: Instant? = null,
+    onMute: (Duration?) -> Unit = {},
+    onCall: ((video: Boolean) -> Unit)? = null,
+    onVerify: () -> Unit = {},
+    content: @Composable (GroupTab) -> Unit,
+) {
+    val dm = ctx?.isDm == true
+    val snackbar = remember { SnackbarHostState() }
+    var menu by remember { mutableStateOf(false) }
+    var confirmLeave by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
+        topBar = {
+            TopAppBar(
+                title = {
+                    if (ctx != null) {
+                        Row(
+                            Modifier.clip(MaterialTheme.shapes.medium)
+                                .clickable(enabled = !dm, onClick = onSettings).padding(vertical = 4.dp, horizontal = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            val other = ctx.other
+                            if (dm) Avatar(ctx.title, other?.avatarUrl, size = 40.dp, colorKey = other?.id ?: ctx.group.id)
+                            else GroupAvatar(ctx.group.icon, ctx.group.photoUrl, size = 40.dp)
+                            Column(Modifier.padding(start = 12.dp)) {
+                                Text(ctx.title, style = MaterialTheme.typography.titleMedium, maxLines = 1)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (mutedUntil != null) {
+                                        GngIcon(GngIcons.NotificationsOff, "Muted", size = 14.dp, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Spacer(Modifier.width(4.dp))
+                                    }
+                                    Text(
+                                        if (dm) "End-to-end encrypted" else "${ctx.members.size} members",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) { GngIcon(GngIcons.ArrowBack, "Back") }
+                },
+                actions = {
+                    if (ctx != null && onCall != null) {
+                        IconButton(onClick = { onCall(false) }) { GngIcon(GngIcons.Call, "Voice call") }
+                        IconButton(onClick = { onCall(true) }) { GngIcon(GngIcons.Videocam, "Video call") }
+                    }
+                    if (ctx != null && !dm && onCall == null) {
+                        IconButton(onClick = {
+                            val text = "Join ${ctx.group.name} on gng. Code: ${ctx.group.inviteCode}"
+                            context.startActivity(
+                                Intent.createChooser(
+                                    Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text),
+                                    "Invite the gang",
+                                ),
+                            )
+                        }) { GngIcon(GngIcons.PersonAdd, "Invite") }
+                    }
+                    Box {
+                        IconButton(onClick = { menu = true }) { GngIcon(GngIcons.MoreVert, "More") }
+                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                            if (!dm) {
+                                DropdownMenuItem(
+                                    text = { Text("Group settings") },
+                                    leadingIcon = { GngIcon(GngIcons.Settings, null) },
+                                    onClick = { menu = false; onSettings() },
+                                )
+                                if (ctx != null && onCall != null) {
+                                    DropdownMenuItem(
+                                        text = { Text("Invite people") },
+                                        leadingIcon = { GngIcon(GngIcons.PersonAdd, null) },
+                                        onClick = {
+                                            menu = false
+                                            val text = "Join ${ctx.group.name} on gng. Code: ${ctx.group.inviteCode}"
+                                            context.startActivity(
+                                                Intent.createChooser(
+                                                    Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text),
+                                                    "Invite the gang",
+                                                ),
+                                            )
+                                        },
+                                    )
+                                }
+                            }
+                            if (mutedUntil != null) {
+                                DropdownMenuItem(
+                                    text = { Text("Unmute") },
+                                    leadingIcon = { GngIcon(GngIcons.Notifications, null) },
+                                    onClick = { menu = false; onMute(null) },
+                                )
+                            } else {
+                                listOf("Mute for 8 hours" to Duration.ofHours(8), "Mute for a week" to Duration.ofDays(7), "Mute always" to Duration.ofDays(3650))
+                                    .forEach { (label, d) ->
+                                        DropdownMenuItem(
+                                            text = { Text(label) },
+                                            leadingIcon = { GngIcon(GngIcons.NotificationsOff, null) },
+                                            onClick = { menu = false; onMute(d) },
+                                        )
+                                    }
+                            }
+                            if (dm) {
+                                DropdownMenuItem(
+                                    text = { Text("Verify encryption") },
+                                    leadingIcon = { GngIcon(GngIcons.VerifiedUser, null) },
+                                    onClick = { menu = false; onVerify() },
+                                )
+                            }
+                            DropdownMenuItem(
+                                text = { Text("My classes") },
+                                leadingIcon = { GngIcon(GngIcons.CalendarMonth, null) },
+                                onClick = { menu = false; onTimetable() },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (dm) "Delete chat" else "Leave gang") },
+                                leadingIcon = { GngIcon(if (dm) GngIcons.Delete else GngIcons.Logout, null) },
+                                onClick = { menu = false; confirmLeave = true },
+                            )
+                        }
+                    }
+                },
+            )
+        },
+        bottomBar = {
+            if (!dm) NavigationBar {
+                GroupTab.entries.forEach { t ->
+                    NavigationBarItem(
+                        selected = tab == t,
+                        onClick = { onTab(t) },
+                        icon = { GngIcon(if (tab == t) t.iconSelected else t.icon, null) },
+                        label = { Text(t.label) },
+                    )
+                }
+            }
+        },
+    ) { padding ->
+        CompositionLocalProvider(LocalSnackbar provides snackbar) {
+            Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
+                when {
+                    ctx == null && error != null ->
+                        EmptyState(GngIcons.WifiOff, "Couldn't load the gang", error, Modifier.align(Alignment.Center))
+                    ctx == null -> Loading()
+                    else -> AnimatedContent(
+                        targetState = tab,
+                        transitionSpec = { fadeIn(tween(220, delayMillis = 60)) togetherWith fadeOut(tween(120)) },
+                        label = "tab",
+                    ) { current -> content(current) }
+                }
+            }
+        }
+    }
+
+    if (confirmLeave) {
+        AlertDialog(
+            onDismissRequest = { confirmLeave = false },
+            icon = { GngIcon(GngIcons.Logout, null) },
+            title = { Text(if (dm) "Delete this chat?" else "Leave ${ctx?.group?.name ?: "this gang"}?") },
+            text = {
+                Text(
+                    if (dm) "It disappears from your list. If either of you messages again it comes back, without the old messages."
+                    else "You can rejoin later with the invite code. You won't be able to read messages from before you rejoin.",
+                )
+            },
+            confirmButton = { TextButton(onClick = { confirmLeave = false; onLeave() }) { Text(if (dm) "Delete" else "Leave") } },
+            dismissButton = { TextButton(onClick = { confirmLeave = false }) { Text("Stay") } },
+        )
+    }
+}

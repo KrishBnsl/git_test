@@ -27,12 +27,19 @@ android {
         applicationId = "com.gng.app"
         minSdk = 26
         targetSdk = 36
-        versionName = "0.2.0"
-        versionCode = 2
+        // CI sets these per release; every update must have a higher versionCode.
+        versionCode = secret("VERSION_CODE").toIntOrNull() ?: 1
+        versionName = secret("VERSION_NAME").ifBlank { "0.1.0" }
 
         // Phones are ARM; skipping x86 roughly halves the APK (WebRTC is mostly native code).
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
 
+        // Where new versions are announced: the latest GitHub release of this repo. Override it in
+        // local.properties (UPDATE_API_URL) to test the updater against a local server.
+        buildConfigField(
+            "String", "UPDATE_API_URL",
+            "\"${secret("UPDATE_API_URL").ifBlank { "https://api.github.com/repos/KrishBnsl/gng/releases/latest" }}\"",
+        )
         buildConfigField("String", "SUPABASE_URL", "\"${secret("SUPABASE_URL")}\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"${secret("SUPABASE_ANON_KEY")}\"")
         buildConfigField("boolean", "HAS_FIREBASE", hasFirebase.toString())
@@ -42,8 +49,28 @@ android {
         buildConfigField("String", "TURN_CREDENTIAL", "\"${secret("TURN_CREDENTIAL")}\"")
     }
 
+    // Release signing key, from local.properties or CI secrets. Without it the release build is unsigned.
+    val keystorePath = secret("RELEASE_KEYSTORE_PATH")
+    if (keystorePath.isNotBlank()) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = secret("RELEASE_KEYSTORE_PASSWORD")
+                keyAlias = secret("RELEASE_KEY_ALIAS")
+                keyPassword = secret("RELEASE_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            // Debug builds are signed with a different key than releases, so they can't update from one.
+            // The updater is only on in debug when a test server is configured.
+            buildConfigField("boolean", "UPDATE_ENABLED", secret("UPDATE_API_URL").isNotBlank().toString())
+        }
         release {
+            buildConfigField("boolean", "UPDATE_ENABLED", "true")
+            signingConfigs.findByName("release")?.let { signingConfig = it }
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
@@ -66,6 +93,7 @@ dependencies {
     implementation(project(":core"))
 
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.core.splashscreen)
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
@@ -96,6 +124,8 @@ dependencies {
     implementation(libs.firebase.messaging)
     implementation(libs.androidx.documentfile)
     implementation(libs.androidx.exifinterface)
+    implementation(libs.coil.network.okhttp)
+    implementation(libs.osmdroid)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

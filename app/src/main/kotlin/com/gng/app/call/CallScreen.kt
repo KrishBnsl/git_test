@@ -50,6 +50,9 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.gng.app.container
 import com.gng.app.data.Profile
+import com.gng.app.ui.components.Avatar
+import com.gng.app.ui.components.GngIcon
+import com.gng.app.ui.icons.GngIcons
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.webrtc.EglBase
@@ -107,8 +110,8 @@ fun CallScreen(calls: CallManager, onClose: () -> Unit) {
         ) {
             if (s.phase == CallPhase.Ringing || s.participants.isEmpty()) {
                 Spacer(Modifier.height(80.dp))
-                val face = s.participants.firstOrNull()?.let { members[it.userId]?.emoji } ?: if (s.video) "📹" else "📞"
-                Text(face, fontSize = 72.sp)
+                val who = s.participants.firstOrNull()?.let { members[it.userId] }
+                Avatar(who?.displayName ?: s.title, who?.avatarUrl, size = 112.dp, colorKey = who?.id ?: s.groupId)
                 Spacer(Modifier.height(16.dp))
             }
             Text(s.title, color = Color.White, style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
@@ -134,18 +137,18 @@ fun CallScreen(calls: CallManager, onClose: () -> Unit) {
         ) {
             when (s.phase) {
                 CallPhase.Ringing -> {
-                    RoundButton("✖️", Color(0xFFE5484D), "Decline") { scope.launch { calls.decline(s.callId) } }
-                    RoundButton(if (s.video) "📹" else "📞", Color(0xFF30A46C), "Accept") { accept() }
+                    RoundButton(GngIcons.CallEnd, RED, Color.White, "Decline") { scope.launch { calls.decline(s.callId) } }
+                    RoundButton(if (s.video) GngIcons.Videocam else GngIcons.Call, GREEN, Color.White, "Accept") { accept() }
                 }
                 CallPhase.Ended -> Text(s.endedReason ?: "Call ended", color = Color.White)
                 else -> {
-                    RoundButton(if (s.micOn) "🎙️" else "🔇", Color.White.copy(alpha = if (s.micOn) 0.18f else 0.85f), if (s.micOn) "Mute" else "Unmute") { calls.toggleMic() }
+                    Toggle(if (s.micOn) GngIcons.Mic else GngIcons.MicOff, !s.micOn, if (s.micOn) "Mute" else "Unmute") { calls.toggleMic() }
                     if (s.video) {
-                        RoundButton(if (s.camOn) "📷" else "🚫", Color.White.copy(alpha = if (s.camOn) 0.18f else 0.85f), "Camera") { calls.toggleCamera() }
-                        RoundButton("🔄", Color.White.copy(alpha = 0.18f), "Flip") { calls.flipCamera() }
+                        Toggle(if (s.camOn) GngIcons.Videocam else GngIcons.VideocamOff, !s.camOn, "Camera") { calls.toggleCamera() }
+                        Toggle(GngIcons.Cameraswitch, false, "Flip") { calls.flipCamera() }
                     }
-                    RoundButton(if (s.speakerOn) "🔊" else "🔈", Color.White.copy(alpha = if (s.speakerOn) 0.85f else 0.18f), "Speaker") { calls.toggleSpeaker() }
-                    RoundButton("📵", Color(0xFFE5484D), "Hang up") { scope.launch { calls.hangUp() } }
+                    Toggle(GngIcons.VolumeUp, s.speakerOn, "Speaker") { calls.toggleSpeaker() }
+                    RoundButton(GngIcons.CallEnd, RED, Color.White, "Hang up") { scope.launch { calls.hangUp() } }
                 }
             }
         }
@@ -183,8 +186,8 @@ private fun ParticipantTile(p: Participant, profile: Profile?, egl: EglBase) {
                 VideoTile(track, egl, Modifier.fillMaxSize(), mirror = false)
             } else {
                 Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(profile?.emoji ?: "👤", fontSize = 56.sp)
-                    if (!p.connected) Text("connecting…", color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp)
+                    Avatar(profile?.displayName ?: "?", profile?.avatarUrl, size = 72.dp, colorKey = p.userId)
+                    if (!p.connected) Text("connecting…", color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
                 }
             }
             Row(
@@ -192,7 +195,8 @@ private fun ParticipantTile(p: Participant, profile: Profile?, egl: EglBase) {
                     .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
                     .padding(horizontal = 8.dp, vertical = 2.dp),
             ) {
-                Text((if (p.micOn) "" else "🔇 ") + (profile?.displayName ?: "someone"), color = Color.White, fontSize = 13.sp)
+                if (!p.micOn) GngIcon(GngIcons.MicOff, "Muted", size = 14.dp, tint = Color.White, modifier = Modifier.padding(end = 4.dp))
+                Text(profile?.displayName ?: "someone", color = Color.White, fontSize = 13.sp)
             }
         }
     }
@@ -217,15 +221,27 @@ private fun VideoTile(track: VideoTrack, egl: EglBase, modifier: Modifier, mirro
     AndroidView({ renderer }, modifier)
 }
 
+private val RED = Color(0xFFE5484D)
+private val GREEN = Color(0xFF30A46C)
+
 @Composable
-private fun RoundButton(emoji: String, color: Color, label: String, size: Dp = 64.dp, onClick: () -> Unit) {
+private fun Toggle(icon: Int, active: Boolean, label: String, onClick: () -> Unit) =
+    RoundButton(
+        icon,
+        if (active) Color.White else Color.White.copy(alpha = 0.18f),
+        if (active) Color(0xFF0F0D14) else Color.White,
+        label, onClick = onClick,
+    )
+
+@Composable
+private fun RoundButton(icon: Int, container: Color, content: Color, label: String, size: Dp = 64.dp, onClick: () -> Unit) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         FilledIconButton(
             onClick = onClick,
             modifier = Modifier.size(size),
             shape = CircleShape,
-            colors = IconButtonDefaults.filledIconButtonColors(containerColor = color),
-        ) { Text(emoji, fontSize = 26.sp) }
+            colors = IconButtonDefaults.filledIconButtonColors(containerColor = container, contentColor = content),
+        ) { GngIcon(icon, label, size = 28.dp, tint = content) }
         Text(label, color = Color.White.copy(alpha = 0.8f), fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
     }
 }
