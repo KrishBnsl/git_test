@@ -11,8 +11,9 @@ About 15 minutes, all free.
    Already ran `0001` earlier? Just run `0002`.
    Then run `supabase/migrations/0003_group_settings_and_map.sql` (group photos and permissions, admin roles, map data).
    Then run `supabase/migrations/0004_direct_messages.sql` (the first, plain-text direct messages).
-   Finally run `supabase/migrations/0005_chat.sql` (end-to-end encryption, encrypted DMs, read receipts, media, push, calls).
-   All five can be run again safely if you're unsure whether you did; run them in order.
+   Then run `supabase/migrations/0005_chat.sql` (end-to-end encryption, encrypted DMs, read receipts, media, push, calls),
+   and `0006_push_triggers.sql` (sends new messages and calls to the push function; see §3).
+   All six can be run again safely if you're unsure whether you did; run them in order.
    ⚠️ After `0005` the server only accepts encrypted chat messages, so everyone needs the new app. Its first run also resets reactions.
 3. **Authentication → Providers → Email**: keep it enabled.
    For a friends-only app it's easiest to turn **Confirm email** *off*. Otherwise everyone has to click a link in their inbox before logging in.
@@ -64,22 +65,26 @@ Without this the app still works; you just only get notified while gng is open.
    then **Add app → Android** with package name `com.gng.app`. Download `google-services.json` into `app/`
    (it's git-ignored). For CI builds, paste its contents into a repo secret named `GOOGLE_SERVICES_JSON`.
 2. **Service account**: Firebase **Project settings → Service accounts → Generate new private key**. Keep that JSON file private.
+   If it says *"Key creation is not allowed ... organization policies"*, your Google Cloud organization blocks key downloads
+   by default. In Google Cloud **IAM & Admin → Organization policies**, open **Disable service account key creation**
+   (`iam.disableServiceAccountKeyCreation`) for the project, **Override parent's policy** with enforcement **Off**,
+   make the key, then set it back to **Inherit parent's policy**. Changing it needs the *Organization Policy Administrator* role.
 3. **Deploy the push function** with the [Supabase CLI](https://supabase.com/docs/guides/cli):
    ```bash
    supabase login
    supabase link --project-ref <your-project-ref>
    supabase secrets set FIREBASE_SERVICE_ACCOUNT="$(cat path/to/service-account.json)"
-   supabase secrets set WEBHOOK_SECRET="$(openssl rand -hex 32)"   # note this value for step 4
+   supabase secrets set WEBHOOK_SECRET="$(openssl rand -hex 32)"   # keep this value for step 4
    supabase functions deploy push --no-verify-jwt
    ```
-4. **Webhooks**: Supabase dashboard **Database → Webhooks → Create a new hook**, once per row:
-   | Name | Table | Events |
-   |---|---|---|
-   | push-messages | `messages` | Insert |
-   | push-calls | `calls` | Insert, Update |
-
-   For each: type **Supabase Edge Functions**, function `push`, method POST,
-   and add an HTTP header `x-webhook-secret` with the value from step 3.
+4. **Hook the database up to it**: run `supabase/migrations/0006_push_triggers.sql` (SQL editor, or
+   `supabase db query --linked -f supabase/migrations/0006_push_triggers.sql`). Then store the function's URL and the
+   same `WEBHOOK_SECRET` from step 3 in Supabase Vault, in the SQL editor:
+   ```sql
+   select vault.create_secret('https://<project-ref>.supabase.co/functions/v1/push', 'push_function_url');
+   select vault.create_secret('<your WEBHOOK_SECRET>', 'push_webhook_secret');
+   ```
+   (This replaces clicking together Database Webhooks in the dashboard, and keeps the secret out of git.)
 5. Rebuild the app. Push can be switched off per phone in **Settings**, and each chat can be muted from its ⋮ menu.
 
 Pushes contain only ids, never message text: the phone downloads and decrypts the message itself before showing it.
