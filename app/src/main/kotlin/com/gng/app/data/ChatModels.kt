@@ -18,6 +18,8 @@ data class MessageRow(
     val ciphertext: String? = null,
     @SerialName("client_id") val clientId: String? = null,
     @SerialName("created_at") val createdAt: String,
+    /** Who was @mentioned (user ids). Plain, so the server can notify them; the text itself is encrypted. */
+    val mentions: List<String>? = null,
 )
 
 @Serializable
@@ -26,6 +28,7 @@ data class NewEncryptedMessage(
     val epoch: Int,
     val ciphertext: String,
     @SerialName("client_id") val clientId: String,
+    val mentions: List<String>? = null,
 )
 
 @Serializable
@@ -65,6 +68,8 @@ data class Conversation(
     @SerialName("last_message_user_id") val lastMessageUserId: String? = null,
     @SerialName("last_message_body") val lastMessageBody: String? = null,
     @SerialName("unread_count") val unreadCount: Long = 0,
+    /** Unread messages that @mention you. */
+    @SerialName("unread_mentions") val unreadMentions: Long = 0,
 ) {
     val isDm get() = kind == "dm"
     val isMuted get() = mutedUntil?.let { parseInstant(it).isAfter(Instant.now()) } ?: false
@@ -107,7 +112,11 @@ data class Payload(
     @SerialName("reply_user") val replyUser: String? = null,
     @SerialName("reply_text") val replyText: String? = null,
     val media: MediaRef? = null,
+    /** User ids @mentioned in [text]; each appears in the text as "@" + their display name. */
+    val mentions: List<String>? = null,
 ) {
+    fun mentions(userId: String) = mentions?.contains(userId) == true
+
     /** One line for previews, notifications and reply quotes. */
     fun preview(): String = when (t) {
         "image" -> "📷 Photo" + (text?.let { " · $it" } ?: "")

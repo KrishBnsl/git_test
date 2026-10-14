@@ -58,6 +58,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -73,6 +74,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -88,6 +91,7 @@ import com.gng.app.container
 import com.gng.app.data.ChatMessage
 import com.gng.app.data.IST
 import com.gng.app.data.MediaRef
+import com.gng.app.data.Profile
 import com.gng.app.data.SendState
 import com.gng.app.data.StickerPack
 import com.gng.app.data.StickerStore
@@ -118,7 +122,8 @@ data class ChatUiState(
 
 /** What the chat can do. Defaults do nothing, for previews. */
 data class ChatActions(
-    val onSend: (String) -> Unit = {},
+    /** Text, plus the user ids picked from the @ list. */
+    val onSend: (String, List<String>) -> Unit = { _, _ -> },
     val onReply: (ChatMessage?) -> Unit = {},
     val onReact: (ChatMessage, String) -> Unit = { _, _ -> },
     val onRetry: (ChatMessage) -> Unit = {},
@@ -269,7 +274,9 @@ fun ChatContent(
 ) {
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
-    var draft by rememberSaveable { mutableStateOf("") }
+    var draft by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
+    // People picked from the @ list while writing this message.
+    val tagged = remember { mutableStateListOf<String>() }
     var actionsFor by remember { mutableStateOf<ChatMessage?>(null) }
     var infoFor by remember { mutableStateOf<ChatMessage?>(null) }
     var viewing by remember { mutableStateOf<MediaRef?>(null) }
@@ -368,17 +375,35 @@ fun ChatContent(
         }
         state.replyTo?.let { target -> ReplyBanner(target, ctx, onClose = { actions.onReply(null) }) }
         if (ctx.canSendMessages) {
+            // "@ar" right before the cursor: suggest people to tag (gangs only).
+            val query = if (ctx.isDm) null else mentionQuery(draft)
+            val suggestions = remember(query, ctx.members) {
+                query?.let { q ->
+                    ctx.members.values.filter { it.id != ctx.me.id && it.displayName.contains(q.text, ignoreCase = true) }
+                        .sortedBy { !it.displayName.startsWith(q.text, ignoreCase = true) }
+                        .take(5)
+                }.orEmpty()
+            }
+            if (query != null && suggestions.isNotEmpty()) {
+                MentionSuggestions(suggestions) { person ->
+                    val insert = "@${person.displayName} "
+                    val text = draft.text.replaceRange(query.start, draft.selection.start, insert)
+                    draft = TextFieldValue(text, TextRange(query.start + insert.length))
+                    tagged += person.id
+                }
+            }
             Composer(
                 draft = draft,
-                onDraft = { draft = it.take(4000) },
+                onDraft = { if (it.text.length <= 4000) draft = it },
                 placeholder = if (ctx.isDm) "Message ${ctx.title.substringBefore(' ')}" else "Message the gang",
                 stickersOpen = stickersOpen,
                 onToggleStickers = { stickersOpen = !stickersOpen },
                 onPhotos = actions.onPhotos,
                 onFile = actions.onFile,
                 onSend = {
-                    actions.onSend(draft)
-                    draft = ""
+                    actions.onSend(draft.text, tagged.toList())
+                    draft = TextFieldValue("")
+                    tagged.clear()
                 },
             )
             if (stickers != null) {
@@ -456,8 +481,8 @@ private fun ReadOnlyBar() {
 
 @Composable
 private fun Composer(
-    draft: String,
-    onDraft: (String) -> Unit,
+    draft: TextFieldValue,
+    onDraft: (TextFieldValue) -> Unit,
     placeholder: String,
     stickersOpen: Boolean,
     onToggleStickers: () -> Unit,
@@ -502,8 +527,45 @@ private fun Composer(
             )
         }
         Spacer(Modifier.width(8.dp))
-        FilledIconButton(onClick = onSend, enabled = draft.isNotBlank(), modifier = Modifier.padding(bottom = 4.dp)) {
+        FilledIconButton(onClick = onSend, enabled = draft.text.isNotBlank(), modifier = Modifier.padding(bottom = 4.dp)) {
             GngIcon(GngIcons.Send, "Send")
+        }
+    }
+}
+
+/** The "@query" being typed right before the cursor, if any. */
+private data class MentionQuery(val start: Int, val text: String)
+
+private fun mentionQuery(value: TextFieldValue): MentionQuery? {
+    val cursor = value.selection.start
+    if (!value.selection.collapsed || cursor <= 0) return null
+    val before = value.text.substring(0, cursor)
+    val at = before.lastIndexOf('@')
+    if (at < 0 || (at > 0 && !before[at - 1].isWhitespace())) return null
+    val q = before.substring(at + 1)
+    // Names have spaces ("Aarav Mehta"), so allow one, but not a new line or a long sentence.
+    if (q.length > 30 || '\n' in q || q.count { it == ' ' } > 1) return null
+    return MentionQuery(at, q)
+}
+
+@Composable
+private fun MentionSuggestions(people: List<Profile>, onPick: (Profile) -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(20.dp),
+        shadowElevation = 4.dp,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+    ) {
+        Column(Modifier.padding(vertical = 6.dp)) {
+            people.forEach { p ->
+                Row(
+                    Modifier.fillMaxWidth().clickable { onPick(p) }.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Avatar(p.displayName, p.avatarUrl, size = 32.dp, colorKey = p.id)
+                    Text(p.displayName, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(start = 12.dp))
+                }
+            }
         }
     }
 }

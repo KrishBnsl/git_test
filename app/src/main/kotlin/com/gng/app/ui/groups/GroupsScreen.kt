@@ -351,8 +351,12 @@ private fun ConversationCard(row: ConversationRow, onClick: () -> Unit) {
                     )
                 }
                 if (unread) {
-                    Badge(containerColor = if (conv.isMuted) scheme.outline else scheme.primary) {
-                        Text(if (conv.unreadCount > 99) "99+" else conv.unreadCount.toString())
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        // Someone tagged you here: always shown, even when the chat is muted.
+                        if (conv.unreadMentions > 0) Badge(containerColor = scheme.primary) { Text("@") }
+                        Badge(containerColor = if (conv.isMuted) scheme.outline else scheme.primary) {
+                            Text(if (conv.unreadCount > 99) "99+" else conv.unreadCount.toString())
+                        }
                     }
                 } else {
                     Spacer(Modifier.height(16.dp))

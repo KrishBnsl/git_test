@@ -77,7 +77,9 @@ class Inbox(private val c: AppContainer) {
 
         val conversation = (c.chat.cachedConversations() ?: runCatching { c.chat.conversations() }.getOrNull())
             ?.firstOrNull { it.id == groupId }
-        if (conversation?.isMuted == true) return
+        val taggedMe = m.payload.mentions(me)
+        // Muted chats stay quiet, unless someone tags you.
+        if (conversation?.isMuted == true && !taggedMe) return
         val members = c.chat.cachedMembers(groupId).orEmpty().associate { it.userId to it.profiles }
         val sender = m.userId?.let { uid -> members[uid] ?: runCatching { c.profiles.get(uid) }.getOrNull() }
         val myName = members[me]?.displayName ?: runCatching { c.profiles.get(me)?.displayName }.getOrNull() ?: "You"
@@ -87,14 +89,14 @@ class Inbox(private val c: AppContainer) {
             isDm -> sender?.displayName ?: "DM"
             else -> conversation.name
         }
-        val text = if (c.settings.previews.first()) {
-            if (m.payload.t == "event") m.payload.text.orEmpty() else m.payload.preview()
-        } else {
-            "New message"
+        val text = when {
+            !c.settings.previews.first() -> if (taggedMe) "You were mentioned" else "New message"
+            m.payload.t == "event" -> m.payload.text.orEmpty()
+            else -> m.payload.preview()
         }
         val senderName = when {
             m.userId == null -> "gng"
-            c.settings.previews.first() -> sender?.displayName ?: "Someone"
+            c.settings.previews.first() -> (sender?.displayName ?: "Someone") + if (taggedMe && !isDm) " mentioned you" else ""
             else -> "Someone"
         }
         c.notifier.showMessage(groupId, title, isDm, senderName, text, messageId, myName)

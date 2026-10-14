@@ -36,7 +36,7 @@ Deno.serve(async (req) => {
       type: "message",
       group_id: r.group_id as string,
       message_id: String(r.id),
-    }, { respectMute: true });
+    }, { respectMute: true, alwaysNotify: (r.mentions as string[] | null) ?? [] });
   } else if (payload.table === "calls" && payload.type === "INSERT") {
     await notifyMembers(r.group_id as string, r.started_by as string, {
       type: "call",
@@ -56,7 +56,8 @@ async function notifyMembers(
   groupId: string,
   exceptUser: string | null,
   data: Record<string, string>,
-  opts: { respectMute: boolean; ttlSeconds?: number },
+  // alwaysNotify: people tagged in the message hear about it even if they muted the chat.
+  opts: { respectMute: boolean; ttlSeconds?: number; alwaysNotify?: string[] },
 ) {
   const { data: members, error } = await supabase
     .from("group_members")
@@ -66,7 +67,8 @@ async function notifyMembers(
   const now = Date.now();
   const recipients = members
     .filter((m) => m.user_id !== exceptUser)
-    .filter((m) => !opts.respectMute || !m.muted_until || Date.parse(m.muted_until) < now)
+    .filter((m) => !opts.respectMute || !m.muted_until || Date.parse(m.muted_until) < now ||
+      (opts.alwaysNotify ?? []).includes(m.user_id))
     .map((m) => m.user_id);
   if (recipients.length === 0) return;
 

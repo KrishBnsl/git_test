@@ -44,6 +44,10 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -229,10 +233,13 @@ private fun BubbleBody(
     } else {
         RoundedCornerShape(if (run.first) big else tight, big, big, tight)
     }
+    val taggedMe = !mine && p.mentions(ctx.me.id)
     Surface(
         color = if (mine) scheme.primaryContainer else scheme.surfaceContainerHigh,
         contentColor = if (mine) scheme.onPrimaryContainer else scheme.onSurface,
         shape = shape,
+        // A message that tags you stands out.
+        border = if (taggedMe) BorderStroke(1.5.dp, scheme.primary) else null,
         modifier = modifier.widthIn(max = 300.dp).alpha(pendingAlpha),
     ) {
         Column(Modifier.width(IntrinsicSize.Max)) {
@@ -263,9 +270,39 @@ private fun BubbleBody(
             val text = p.text?.takeIf { p.t == "text" || p.t == "legacy" || p.t == "image" }
             if (text != null) {
                 Text(
-                    text,
+                    withMentions(text, p.mentions, ctx, mine),
                     style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                )
+            }
+        }
+    }
+}
+
+/** Highlights each "@Name" that really is a tag (not just someone typing an @). */
+@Composable
+private fun withMentions(text: String, mentions: List<String>?, ctx: GroupContext, mine: Boolean): AnnotatedString {
+    if (mentions.isNullOrEmpty()) return AnnotatedString(text)
+    val scheme = MaterialTheme.colorScheme
+    return remember(text, mentions, ctx.members, scheme) {
+        val spans = mentions.mapNotNull { id ->
+            val name = ctx.members[id]?.displayName ?: return@mapNotNull null
+            val needle = "@$name"
+            generateSequence(text.indexOf(needle)) { prev -> text.indexOf(needle, prev + needle.length).takeIf { it >= 0 } }
+                .takeWhile { it >= 0 }
+                .map { start -> Triple(start, start + needle.length, id == ctx.me.id) }
+                .toList()
+        }.flatten().sortedBy { it.first }
+        buildAnnotatedString {
+            append(text)
+            spans.forEach { (start, end, isMe) ->
+                addStyle(
+                    SpanStyle(
+                        fontWeight = FontWeight.Bold,
+                        color = if (mine) scheme.onPrimaryContainer else scheme.primary,
+                        background = if (isMe) scheme.primary.copy(alpha = 0.14f) else androidx.compose.ui.graphics.Color.Unspecified,
+                    ),
+                    start, end,
                 )
             }
         }

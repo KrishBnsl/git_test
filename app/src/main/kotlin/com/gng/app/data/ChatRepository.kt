@@ -153,7 +153,7 @@ class ChatRepository(
             val plaintext = json.encodeToString(Payload.serializer(), draft.payload).toByteArray()
             val ciphertext = Aead.seal(key.key, plaintext, messageAad(draft.groupId, key.epoch, myId, clientId)).b64()
             val row = client.from("messages")
-                .insert(NewEncryptedMessage(draft.groupId, key.epoch, ciphertext, clientId)) { select() }
+                .insert(NewEncryptedMessage(draft.groupId, key.epoch, ciphertext, clientId, draft.payload.mentions?.takeIf { it.isNotEmpty() })) { select() }
                 .decodeSingle<MessageRow>()
             draft.copy(id = row.id, createdAt = parseInstant(row.createdAt), state = SendState.Sent)
                 .also { cache.put(listOf(it)) }

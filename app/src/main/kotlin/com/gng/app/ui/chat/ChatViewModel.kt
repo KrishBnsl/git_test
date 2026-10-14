@@ -169,9 +169,11 @@ class ChatViewModel(private val c: AppContainer, private val ctx: GroupContext) 
 
     // --- sending ----------------------------------------------------------------------
 
-    fun sendText(text: String) {
+    /** [tagged]: people picked from the @ list; only those still named in the text are kept. */
+    fun sendText(text: String, tagged: Collection<String> = emptyList()) {
         val body = text.trim().takeIf { it.isNotEmpty() } ?: return
-        send(withReply(Payload("text", text = body)))
+        val mentions = tagged.distinct().filter { id -> id != myId && ctx.members[id]?.let { "@${it.displayName}" in body } == true }
+        send(withReply(Payload("text", text = body, mentions = mentions.takeIf { it.isNotEmpty() })))
     }
 
     fun sendImages(context: Context, uris: List<Uri>) = uris.take(10).forEach { uri ->
