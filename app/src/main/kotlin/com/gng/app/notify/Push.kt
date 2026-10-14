@@ -105,7 +105,9 @@ class Inbox(private val c: AppContainer) {
         if (call.startedBy == me || call.endedAt != null) return
         val conversation = (c.chat.cachedConversations() ?: runCatching { c.chat.conversations() }.getOrNull())
             ?.firstOrNull { it.id == call.groupId }
-        val caller = runCatching { c.profiles.get(call.startedBy) }.getOrNull()
+        // Cached names first, so the phone starts ringing without waiting on the network.
+        val caller = c.chat.cachedMembers(call.groupId)?.firstOrNull { it.userId == call.startedBy }?.profiles
+            ?: runCatching { c.profiles.get(call.startedBy) }.getOrNull()
         val callerName = caller?.displayName ?: "Someone"
         val title = if (conversation == null || conversation.isDm) callerName else conversation.name
         if (!c.calls.ring(call, title, callerName, isDm = conversation?.isDm != false)) return
