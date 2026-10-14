@@ -9,8 +9,6 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.media.AudioAttributes
-import android.media.RingtoneManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -39,16 +37,14 @@ class Notifier(private val context: Context) {
                 },
             )
             nm.createNotificationChannel(
+                // The ringtone and vibration are played by the app (CallSounds) so they loop until you answer,
+                // so this channel itself is silent.
                 NotificationChannel(CH_CALLS, "Incoming calls", NotificationManager.IMPORTANCE_HIGH).apply {
-                    setSound(
-                        RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE),
-                        AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build(),
-                    )
-                    vibrationPattern = longArrayOf(0, 800, 600, 800)
-                    enableVibration(true)
+                    setSound(null, null)
+                    enableVibration(false)
                 },
             )
+            nm.deleteNotificationChannel("calls") // the old, noisy channel from 0.4.0
             nm.createNotificationChannel(NotificationChannel(CH_ONGOING, "Ongoing call", NotificationManager.IMPORTANCE_LOW))
         }
     }
@@ -198,7 +194,7 @@ class Notifier(private val context: Context) {
 
     companion object {
         const val CH_MESSAGES = "messages"
-        const val CH_CALLS = "calls"
+        const val CH_CALLS = "incoming_calls"
         const val CH_ONGOING = "ongoing_call"
         const val RING_TIMEOUT_MS = 45_000L
     }

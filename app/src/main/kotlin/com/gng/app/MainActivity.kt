@@ -52,7 +52,7 @@ class MainActivity : ComponentActivity() {
         if (shared.isEmpty()) return
         lifecycleScope.launch {
             val msg = runCatching { container.stickers.importFiles(shared) }
-                .fold({ if (it > 0) "Added $it to your gng stickers 🎉" else "Those are already in your stickers" }, { it.message ?: "Couldn't import that" })
+                .fold({ it.describe() + " to your gng stickers" }, { it.message ?: "Couldn't import that" })
             Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
         }
     }
