@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -14,6 +16,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -49,7 +52,7 @@ fun SettingsScreen(me: Profile, onEditProfile: () -> Unit, onTimetable: () -> Un
             )
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
+        Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
             FunCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     EmojiAvatar(me.emoji, MaterialTheme.colorScheme.primaryContainer, 56.dp)
@@ -66,18 +69,50 @@ fun SettingsScreen(me: Profile, onEditProfile: () -> Unit, onTimetable: () -> Un
                 FilterChip(theme == ThemeMode.Light, { scope.launch { c.settings.setTheme(ThemeMode.Light) } }, label = { Text("☀️ Playful") })
                 FilterChip(theme == ThemeMode.Dark, { scope.launch { c.settings.setTheme(ThemeMode.Dark) } }, label = { Text("🌚 Neon") })
             }
+            SectionHeader("Notifications & privacy")
+            val push by c.settings.push.collectAsStateWithLifecycle(true)
+            val previews by c.settings.previews.collectAsStateWithLifecycle(true)
+            val receipts by c.settings.readReceipts.collectAsStateWithLifecycle(true)
+            SettingSwitch(
+                "🔔 Push notifications",
+                if (c.push.available) "Messages and calls, even when gng is closed" else "Not set up in this build (needs Firebase, see docs/SETUP.md)",
+                push && c.push.available,
+                enabled = c.push.available,
+            ) { scope.launch { c.settings.setPush(it) } }
+            SettingSwitch("👀 Message previews", "Show who said what in notifications", previews) { scope.launch { c.settings.setPreviews(it) } }
+            SettingSwitch("✔️ Send read receipts", "When off, people see Delivered but not Read", receipts) { scope.launch { c.settings.setReadReceipts(it) } }
+            Text(
+                "🔒 Messages, photos, files, stickers and reactions are end-to-end encrypted. Calls are peer-to-peer encrypted.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 8.dp),
+            )
             SectionHeader("Stuff")
             OutlinedButton(onClick = onTimetable, modifier = Modifier.fillMaxWidth()) { Text("🗓️ My classes") }
             OutlinedButton(
                 onClick = {
                     scope.launch {
-                        // Stop sharing before logging out so nobody sees a stale spot.
+                        // Stop sharing before logging out so nobody sees a stale spot,
+                        // and stop pushes to this phone.
                         runCatching { c.checkIn.setMode(SharingMode.Off) }
+                        runCatching { c.push.unregister() }
+                        c.cache.wipe()
                         c.auth.signOut()
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("👋 Log out") }
         }
+    }
+}
+
+@Composable
+private fun SettingSwitch(title: String, subtitle: String, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = checked, onCheckedChange = onChange, enabled = enabled)
     }
 }

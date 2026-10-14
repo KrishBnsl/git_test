@@ -10,3 +10,4 @@ build/
 .kotlin/
 *.keystore
 !debug.keystore
+/app/google-services.json

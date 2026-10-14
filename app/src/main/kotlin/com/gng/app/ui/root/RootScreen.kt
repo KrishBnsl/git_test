@@ -24,6 +24,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 sealed interface RootState {
@@ -49,7 +51,10 @@ class RootViewModel(private val c: AppContainer) : ViewModel() {
                         if (current is RootState.Ready && current.me.id == uid) return@collectLatest
                         loadProfile(uid)
                     }
-                    is SessionStatus.NotAuthenticated -> _state.value = RootState.SignedOut
+                    is SessionStatus.NotAuthenticated -> {
+                        session?.cancel()
+                        _state.value = RootState.SignedOut
+                    }
                     is SessionStatus.RefreshFailure ->
                         if (_state.value !is RootState.Ready) _state.value = RootState.Offline
                     else -> Unit // still loading the stored session
@@ -58,12 +63,34 @@ class RootViewModel(private val c: AppContainer) : ViewModel() {
         }
     }
 
+    private var session: Job? = null
+
     private suspend fun loadProfile(uid: String) {
         _state.value = RootState.Loading
         _state.value = runCatching { c.profiles.get(uid) }.fold(
             onSuccess = { if (it == null) RootState.NeedsProfile(uid) else RootState.Ready(it) },
             onFailure = { RootState.Offline },
         )
+        if (_state.value is RootState.Ready) startSession(uid)
+    }
+
+    /** Things that run while you're signed in: encryption key, push token, incoming calls. */
+    private fun startSession(uid: String) {
+        session?.cancel()
+        session = viewModelScope.launch {
+            launch { runCatching { c.e2ee.publishIdentity(uid) } }
+            launch { c.settings.push.collectLatest { c.push.sync(it) } }
+            launch {
+                while (true) {
+                    runCatching {
+                        c.chat.callChanges().collect { call ->
+                            if (call.endedAt != null) c.calls.remoteEnded(call.id) else c.inbox.onCall(call)
+                        }
+                    }
+                    delay(5_000)
+                }
+            }
+        }
     }
 
     fun retry() {
@@ -72,12 +99,14 @@ class RootViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     fun profileSaved(p: Profile) {
+        val first = _state.value !is RootState.Ready
         _state.value = RootState.Ready(p)
+        if (first) startSession(p.id)
     }
 }
 
 @Composable
-fun RootScreen() {
+fun RootScreen(openGroup: String? = null, onOpened: () -> Unit = {}) {
     if (!Supabase.isConfigured) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             EmptyState(
@@ -99,6 +128,6 @@ fun RootScreen() {
             }
         }
         is RootState.NeedsProfile -> ProfileScreen(userId = s.userId, existing = null, onSaved = vm::profileSaved)
-        is RootState.Ready -> MainNav(me = s.me, onProfileSaved = vm::profileSaved)
+        is RootState.Ready -> MainNav(me = s.me, onProfileSaved = vm::profileSaved, openGroup = openGroup, onOpened = onOpened)
     }
 }

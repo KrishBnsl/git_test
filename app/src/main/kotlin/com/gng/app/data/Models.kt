@@ -30,47 +30,16 @@ data class Group(
     val emoji: String,
     @SerialName("invite_code") val inviteCode: String,
     @SerialName("created_by") val createdBy: String,
-)
+    val kind: String = "gang",
+) {
+    val isDm get() = kind == "dm"
+}
 
 @Serializable
 data class Member(
     @SerialName("user_id") val userId: String,
     val role: String,
     val profiles: Profile,
-)
-
-@Serializable
-data class Message(
-    val id: Long,
-    @SerialName("group_id") val groupId: String,
-    @SerialName("user_id") val userId: String? = null,
-    val body: String,
-    val kind: String = "text",
-    @SerialName("ref_id") val refId: String? = null,
-    @SerialName("created_at") val createdAt: String,
-) {
-    val createdInstant: Instant get() = parseInstant(createdAt)
-}
-
-@Serializable
-data class NewMessage(
-    @SerialName("group_id") val groupId: String,
-    val body: String,
-)
-
-@Serializable
-data class Reaction(
-    @SerialName("message_id") val messageId: Long,
-    @SerialName("user_id") val userId: String,
-    @SerialName("group_id") val groupId: String,
-    val emoji: String,
-)
-
-@Serializable
-data class NewReaction(
-    @SerialName("message_id") val messageId: Long,
-    @SerialName("group_id") val groupId: String,
-    val emoji: String,
 )
 
 enum class PlanKind(val db: String, val emoji: String, val label: String) {

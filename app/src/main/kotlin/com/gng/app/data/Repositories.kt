@@ -111,43 +111,6 @@ class GroupRepository(private val client: SupabaseClient) {
     private data class GroupIdRow(@SerialName("group_id") val groupId: String)
 }
 
-class ChatRepository(private val client: SupabaseClient) {
-    suspend fun recent(groupId: String, limit: Long = 100): List<Message> =
-        client.from("messages").select {
-            filter { eq("group_id", groupId) }
-            order("created_at", Order.DESCENDING)
-            limit(limit)
-        }.decodeList<Message>().reversed()
-
-    suspend fun send(groupId: String, body: String) {
-        client.from("messages").insert(NewMessage(groupId, body))
-    }
-
-    suspend fun reactions(groupId: String): List<Reaction> =
-        client.from("reactions").select { filter { eq("group_id", groupId) } }.decodeList()
-
-    suspend fun toggleReaction(message: Message, emoji: String, userId: String, alreadyReacted: Boolean) {
-        if (alreadyReacted) {
-            client.from("reactions").delete {
-                filter {
-                    eq("message_id", message.id)
-                    eq("user_id", userId)
-                    eq("emoji", emoji)
-                }
-            }
-        } else {
-            client.from("reactions").insert(NewReaction(message.id, message.groupId, emoji))
-        }
-    }
-
-    /** New messages as they arrive. Collect from a scope that lives as long as the screen. */
-    fun incoming(groupId: String): Flow<Message> = tableChanges(client, "messages", groupId)
-        .map { it.decodeRecord<Message>() }
-
-    /** Fires whenever a reaction in this group is added or removed. */
-    fun reactionChanges(groupId: String): Flow<Unit> = anyChange(client, "reactions", groupId)
-}
-
 class PlansRepository(private val client: SupabaseClient) {
     suspend fun upcoming(groupId: String): List<Plan> =
         client.from("plans").select {
@@ -284,20 +247,6 @@ class StudyRepository(private val client: SupabaseClient) {
 }
 
 // --- realtime helpers -------------------------------------------------------
-
-private fun tableChanges(client: SupabaseClient, table: String, groupId: String): Flow<PostgresAction.Insert> = flow {
-    val channel = client.channel("$table-$groupId-${UUID.randomUUID()}")
-    val inserts = channel.postgresChangeFlow<PostgresAction.Insert>(schema = "public") {
-        this.table = table
-        filter("group_id", FilterOperator.EQ, groupId)
-    }
-    channel.subscribe()
-    try {
-        emitAll(inserts)
-    } finally {
-        withContext(NonCancellable) { client.realtime.removeChannel(channel) }
-    }
-}
 
 private fun anyChange(client: SupabaseClient, table: String, groupId: String, vararg moreTables: String): Flow<Unit> = flow {
     val channel = client.channel("$table-$groupId-${UUID.randomUUID()}")
