@@ -11,3 +11,4 @@ build/
 *.keystore
 !debug.keystore
 /app/google-services.json
+/supabase/.temp/
