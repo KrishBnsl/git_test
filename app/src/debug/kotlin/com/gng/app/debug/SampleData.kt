@@ -1,7 +1,8 @@
 package com.gng.app.debug
 
-import com.gng.app.data.DmInboxRow
-import com.gng.app.data.DmMessage
+import com.gng.app.data.ChatMessage
+import com.gng.app.data.Conversation
+import com.gng.app.data.Payload
 import com.gng.app.data.Exam
 import com.gng.app.data.Group
 import com.gng.app.data.CountRow
@@ -9,14 +10,13 @@ import com.gng.app.data.IST
 import com.gng.app.data.LunchLog
 import com.gng.app.data.Material
 import com.gng.app.data.MaterialVote
-import com.gng.app.data.Message
 import com.gng.app.data.Plan
 import com.gng.app.data.Presence
 import com.gng.app.data.Profile
-import com.gng.app.data.Reaction
 import com.gng.app.data.Rsvp
 import com.gng.app.data.TimetableSlot
 import com.gng.app.ui.group.GroupContext
+import com.gng.app.ui.groups.ConversationRow
 import com.gng.core.ClassSlot
 import java.time.Instant
 import java.time.LocalDate
@@ -56,23 +56,33 @@ object SampleData {
         bhavya, people.associateBy { it.id }, roles,
     )
 
+    private fun msg(id: Long, userId: String?, body: String, kind: String = "text", ref: String? = null, minutesAgo: Long) =
+        ChatMessage(
+            id = id, clientId = if (kind == "text") "c$id" else null, groupId = "g1", userId = userId, kind = kind,
+            createdAt = now.minus(minutesAgo, ChronoUnit.MINUTES),
+            payload = if (kind == "text") Payload("text", text = body) else Payload("event", text = body), refId = ref,
+        )
+
     val messages = listOf(
-        Message(1, "g1", null, "Hostel H4 Maggi Club is live. Share the code K7P2QX to bring in the gang.", "system", null, ago(60 * 26)),
-        Message(2, "g1", aarav.id, "who has the DSA PYQs", "text", null, ago(60 * 25)),
-        Message(3, "g1", bhavya.id, "uploading them tonight", "text", null, ago(60 * 25 - 2)),
-        Message(4, "g1", null, "Midterm: Data Structures on Fri 24 Oct", "exam", "e1", ago(190)).copy(userId = bhavya.id),
-        Message(5, "g1", chirag.id, "mic mac at 1?", "text", null, ago(64)),
-        Message(6, "g1", chirag.id, "I'm starving", "text", null, ago(63)),
-        Message(7, "g1", me.id, "yes please, finishing the lab", "text", null, ago(55)),
-        Message(8, "g1", null, "Lunch: Lunch together? at Mic Mac · Tue 1:00 pm", "plan", "p1", ago(52)).copy(userId = aarav.id),
-        Message(9, "g1", diya.id, "count me in", "text", null, ago(40)),
-        Message(10, "g1", diya.id, "also it's my birthday so someone is paying", "text", null, ago(39)),
-        Message(11, "g1", me.id, "happy birthday!! chai on me", "text", null, ago(12)),
-        Message(12, "g1", esha.id, "wait it's today?? HBD", "text", null, ago(4)),
+        msg(1, null, "Hostel H4 Maggi Club is live. Share the code K7P2QX to bring in the gang.", "system", minutesAgo = 60 * 26),
+        msg(2, aarav.id, "who has the DSA PYQs", minutesAgo = 60 * 25),
+        msg(3, bhavya.id, "uploading them tonight", minutesAgo = 60 * 25 - 2),
+        msg(4, bhavya.id, "Midterm: Data Structures on Fri 24 Oct", "exam", "e1", minutesAgo = 190),
+        msg(5, chirag.id, "mic mac at 1?", minutesAgo = 64),
+        msg(6, chirag.id, "I'm starving", minutesAgo = 63),
+        msg(7, me.id, "yes please, finishing the lab", minutesAgo = 55),
+        msg(8, aarav.id, "Lunch: Lunch together? at Mic Mac · Tue 1:00 pm", "plan", "p1", minutesAgo = 52),
+        msg(9, diya.id, "count me in", minutesAgo = 40).let {
+            it.copy(payload = it.payload.copy(replyTo = 5, replyUser = chirag.id, replyText = "mic mac at 1?"))
+        },
+        msg(10, diya.id, "also it's my birthday so someone is paying", minutesAgo = 39),
+        msg(11, me.id, "happy birthday!! chai on me", minutesAgo = 12),
+        msg(12, esha.id, "wait it's today?? HBD", minutesAgo = 4),
     )
-    val reactions = listOf(
-        Reaction(10, aarav.id, "g1", "😂"), Reaction(10, bhavya.id, "g1", "😂"), Reaction(10, me.id, "g1", "🔥"),
-        Reaction(11, diya.id, "g1", "❤️"),
+    /** messageId -> (userId -> tapback) */
+    val reactions: Map<Long, Map<String, String>> = mapOf(
+        10L to mapOf(aarav.id to "😂", bhavya.id to "😂", me.id to "🔥"),
+        11L to mapOf(diya.id to "❤️"),
     )
 
     private fun at(hour: Int, minute: Int = 0): String =
@@ -112,22 +122,36 @@ object SampleData {
         MaterialVote("m2", me.id, "g1"), MaterialVote("m3", bhavya.id, "g1"),
     )
 
-    // Direct messages
-    val inbox = listOf(
-        DmInboxRow("t1", aarav.id, "are you coming to mic mac or not", aarav.id, ago(4), unread = 2),
-        DmInboxRow("t2", bhavya.id, "uploading the PYQs tonight", me.id, ago(60 * 5), unread = 0),
-        DmInboxRow("t3", diya.id, "thank you for the chai!!", diya.id, ago(60 * 26), unread = 0),
-        DmInboxRow("t4", chirag.id, "lab file kal tak?", me.id, ago(60 * 24 * 4), unread = 0),
+    // The home list: gangs and DMs together
+    private fun conv(id: String, name: String, icon: String, kind: String = "gang", other: String? = null,
+                     body: String?, from: String?, minutesAgo: Long, unread: Long = 0) = Conversation(
+        id = id, name = name, emoji = icon, kind = kind, inviteCode = "K7P2QX", createdBy = me.id, otherUserId = other,
+        lastMessageId = 1, lastMessageAt = ago(minutesAgo), lastMessageKind = "system", lastMessageUserId = from,
+        lastMessageBody = body, unreadCount = unread,
     )
-    val inboxPeople = people.associateBy { it.id }
+    val conversations = listOf(
+        ConversationRow(conv("d1", "Direct message", "chat_bubble", "dm", aarav.id, null, aarav.id, 4, unread = 2), aarav.displayName, "are you coming to mic mac or not", aarav),
+        ConversationRow(conv("g1", "Hostel H4 Maggi Club", "restaurant", body = null, from = esha.id, minutesAgo = 4, unread = 5), "Hostel H4 Maggi Club", "Esha: wait it's today?? HBD"),
+        ConversationRow(conv("d2", "Direct message", "chat_bubble", "dm", bhavya.id, null, me.id, 60 * 5), bhavya.displayName, "You: uploading the PYQs tonight", bhavya),
+        ConversationRow(conv("g2", "CSE B3", "school", body = null, from = null, minutesAgo = 60 * 30), "CSE B3", "Midterm: Operating Systems on Mon"),
+        ConversationRow(conv("g3", "Cricket Sundays", "sports_cricket", body = null, from = null, minutesAgo = 60 * 24 * 3), "Cricket Sundays", "Aarav started a voice call"),
+    )
+
+    /** A DM with Aarav. */
+    val dmCtx = GroupContext(
+        Group("d1", "Direct message", "chat_bubble", "DMXXXX", me.id, kind = "dm"),
+        me, listOf(me, aarav).associateBy { it.id }, emptyMap(),
+    )
     val dmWithAarav = listOf(
-        DmMessage(1, "t1", me.id, "did you finish the DSA assignment", ago(60 * 3)),
-        DmMessage(2, "t1", aarav.id, "half of it, stuck on the last question", ago(60 * 3 - 2)),
-        DmMessage(3, "t1", aarav.id, "the one with the segment tree", ago(60 * 3 - 3)),
-        DmMessage(4, "t1", me.id, "same lol, let's do it together after lunch", ago(60 * 2)),
-        DmMessage(5, "t1", aarav.id, "deal", ago(60 * 2 - 1)),
-        DmMessage(6, "t1", aarav.id, "are you coming to mic mac or not", ago(4)),
-    )
+        "did you finish the DSA assignment" to me.id, "half of it, stuck on the last question" to aarav.id,
+        "the one with the segment tree" to aarav.id, "same lol, let's do it together after lunch" to me.id,
+        "deal" to aarav.id, "are you coming to mic mac or not" to aarav.id,
+    ).mapIndexed { i, (text, who) ->
+        ChatMessage(
+            id = i + 1L, clientId = "dm$i", groupId = "d1", userId = who, kind = "text",
+            createdAt = now.minus(listOf(180L, 178, 177, 120, 119, 4)[i], ChronoUnit.MINUTES), payload = Payload("text", text = text),
+        )
+    }
 
     // Spots around DTU Rohini
     private val library = 28.7511 to 77.1180

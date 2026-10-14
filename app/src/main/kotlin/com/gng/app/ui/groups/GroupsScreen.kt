@@ -47,9 +47,19 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.gng.app.data.Group
-import com.gng.app.data.GroupRepository
-import com.gng.app.data.Profile
+import com.gng.app.AppContainer
+import com.gng.app.data.Conversation
+import com.gng.app.data.parseInstant
 import com.gng.app.ui.components.Avatar
+import com.gng.app.ui.dm.NewMessageSheet
+import com.gng.app.ui.dm.inboxTime
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.debounce
+import com.gng.app.data.Profile
 import com.gng.app.ui.components.Choice
 import com.gng.app.ui.components.EmptyState
 import com.gng.app.ui.components.GngIcon
@@ -70,8 +80,20 @@ import com.gng.app.update.UpdateState
 import com.gng.core.InviteCodes
 import kotlinx.coroutines.launch
 
-class GroupsViewModel(private val repo: GroupRepository) : ViewModel() {
-    var groups by mutableStateOf<List<Group>?>(null)
+/** One line of the home list: a gang or a DM, with what to show for it. */
+data class ConversationRow(
+    val conversation: Conversation,
+    val title: String,
+    val preview: String,
+    /** The other person, for DMs. */
+    val other: Profile? = null,
+)
+
+@OptIn(kotlinx.coroutines.FlowPreview::class)
+class GroupsViewModel(private val c: AppContainer, private val me: Profile) : ViewModel() {
+    var rows by mutableStateOf<List<ConversationRow>?>(null)
+        private set
+    var people by mutableStateOf<List<Profile>>(emptyList())
         private set
     var refreshing by mutableStateOf(false)
         private set
@@ -80,19 +102,74 @@ class GroupsViewModel(private val repo: GroupRepository) : ViewModel() {
     var busy by mutableStateOf(false)
         private set
 
+    private val profileCache = mutableMapOf<String, Profile>()
+    private val markedDelivered = mutableMapOf<String, Long>()
+
+    init {
+        viewModelScope.launch {
+            c.chat.cachedConversations()?.let { rows = build(it) }
+            refresh()
+        }
+        // Keep the list live: a new message anywhere refreshes order, previews and badges.
+        viewModelScope.launch {
+            while (true) {
+                runCatching { c.chat.anyMessage().debounce(400).collect { refresh() } }
+                delay(5_000)
+            }
+        }
+    }
+
     fun dismissError() { error = null }
 
     fun refresh() = viewModelScope.launch {
-        refreshing = true
-        runCatching { repo.myGroups() }
-            .onSuccess { groups = it.sortedBy { g -> g.name.lowercase() }; error = null }
-            .onFailure { error = it.friendly(); if (groups == null) groups = emptyList() }
+        refreshing = rows == null
+        runCatching { c.chat.conversations() }
+            .onSuccess { list ->
+                rows = build(list)
+                error = null
+                // These are on the phone now, so senders can see "Delivered".
+                list.forEach { conv ->
+                    val last = conv.lastMessageId ?: return@forEach
+                    if (conv.unreadCount > 0 && (markedDelivered[conv.id] ?: 0) < last) {
+                        markedDelivered[conv.id] = last
+                        launch { runCatching { c.chat.markSeen(conv.id, last, null) } }
+                    }
+                }
+            }
+            .onFailure { error = it.friendly(); if (rows == null) rows = emptyList() }
         refreshing = false
     }
 
-    fun create(name: String, icon: String, onDone: (Group) -> Unit) = act(onDone) { repo.create(name, icon) }
+    private suspend fun build(list: List<Conversation>): List<ConversationRow> = list.map { conv ->
+        val members = c.chat.cachedMembers(conv.id).orEmpty().associate { it.userId to it.profiles }
+        val other = conv.otherUserId?.takeIf { conv.isDm }?.let { id ->
+            members[id] ?: profileCache[id] ?: runCatching { c.profiles.get(id) }.getOrNull()?.also { profileCache[id] = it }
+        }
+        ConversationRow(conv, if (conv.isDm) other?.displayName ?: "Direct message" else conv.name, preview(conv, members), other)
+    }
 
-    fun join(code: String, onDone: (Group) -> Unit) = act(onDone) { repo.join(code) }
+    private suspend fun preview(conv: Conversation, members: Map<String, Profile>): String {
+        val id = conv.lastMessageId ?: return if (conv.isDm) "Say hi" else "No messages yet"
+        val who = when (conv.lastMessageUserId) {
+            null -> ""
+            me.id -> "You: "
+            else -> if (conv.isDm) "" else members[conv.lastMessageUserId]?.displayName?.substringBefore(' ')?.let { "$it: " } ?: ""
+        }
+        if (conv.lastMessageKind != "text") return conv.lastMessageBody.orEmpty()
+        // Message text is encrypted on the server; show it only if this phone has already decrypted it.
+        val cached = c.cache.get(id)?.payload?.takeIf { it.t != "locked" }
+        return who + (cached?.preview() ?: conv.lastMessageBody ?: "New message")
+    }
+
+    fun loadPeople() = viewModelScope.launch {
+        runCatching { c.chat.people(me.id) }.onSuccess { people = it }.onFailure { error = it.friendly() }
+    }
+
+    fun openDm(userId: String, onDone: (Group) -> Unit) = act(onDone) { c.chat.openDm(userId) }
+
+    fun create(name: String, icon: String, onDone: (Group) -> Unit) = act(onDone) { c.groups.create(name, icon) }
+
+    fun join(code: String, onDone: (Group) -> Unit) = act(onDone) { c.groups.join(code) }
 
     private fun act(onDone: (Group) -> Unit, block: suspend () -> Group) {
         if (busy) return
@@ -108,17 +185,19 @@ class GroupsViewModel(private val repo: GroupRepository) : ViewModel() {
 }
 
 @Composable
-fun GroupsScreen(me: Profile, unreadDms: Int, onOpen: (Group) -> Unit, onSettings: () -> Unit, onMessages: () -> Unit) {
-    val vm = gngViewModel { GroupsViewModel(it.groups) }
-    LaunchedEffect(Unit) { vm.refresh() }
+fun GroupsScreen(me: Profile, onOpen: (Group) -> Unit, onSettings: () -> Unit) {
+    val vm = gngViewModel { GroupsViewModel(it, me) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.refresh() }
     var sheet by remember { mutableStateOf<GangSheetMode?>(null) }
+    var picker by remember { mutableStateOf(false) }
 
     val updates = LocalContext.current.container.updates
     val updateState by updates.state.collectAsStateWithLifecycle()
     GroupsContent(
         updateState = updateState, updateActions = updates.actions(),
-        me = me, unreadDms = unreadDms, groups = vm.groups, refreshing = vm.refreshing, error = vm.error, onDismissError = vm::dismissError,
-        onRefresh = { vm.refresh() }, onOpen = onOpen, onSettings = onSettings, onMessages = onMessages,
+        me = me, rows = vm.rows, refreshing = vm.refreshing, error = vm.error, onDismissError = vm::dismissError,
+        onRefresh = { vm.refresh() }, onOpen = { onOpen(it.conversation.toGroup()) }, onSettings = onSettings,
+        onNewMessage = { vm.loadPeople(); picker = true },
         onStart = { sheet = GangSheetMode.Start }, onJoin = { sheet = GangSheetMode.Join },
     )
 
@@ -130,6 +209,11 @@ fun GroupsScreen(me: Profile, unreadDms: Int, onOpen: (Group) -> Unit, onSetting
             onJoin = { code -> vm.join(code) { sheet = null; onOpen(it) } },
         )
     }
+    if (picker) {
+        NewMessageSheet(vm.people, onDismiss = { picker = false }) { userId ->
+            vm.openDm(userId) { picker = false; onOpen(it) }
+        }
+    }
 }
 
 enum class GangSheetMode { Start, Join }
@@ -138,15 +222,14 @@ enum class GangSheetMode { Start, Join }
 @Composable
 fun GroupsContent(
     me: Profile,
-    unreadDms: Int,
-    groups: List<Group>?,
+    rows: List<ConversationRow>?,
     refreshing: Boolean,
     error: String?,
     onDismissError: () -> Unit,
     onRefresh: () -> Unit,
-    onOpen: (Group) -> Unit,
+    onOpen: (ConversationRow) -> Unit,
     onSettings: () -> Unit,
-    onMessages: () -> Unit,
+    onNewMessage: () -> Unit,
     onStart: () -> Unit,
     onJoin: () -> Unit,
     updateState: UpdateState = UpdateState.Idle,
@@ -155,8 +238,8 @@ fun GroupsContent(
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val snackbar = remember { SnackbarHostState() }
     // Sheet errors show inside the sheet; list errors show as a snackbar.
-    LaunchedEffect(error, groups) {
-        if (error != null && groups != null && groups.isEmpty()) {
+    LaunchedEffect(error, rows) {
+        if (error != null && rows != null && rows.isEmpty()) {
             snackbar.showSnackbar(error)
             onDismissError()
         }
@@ -169,18 +252,14 @@ fun GroupsContent(
             LargeTopAppBar(
                 title = { Text("Hey, ${me.displayName.substringBefore(' ')}") },
                 actions = {
-                    IconButton(onClick = onMessages) {
-                        BadgedBox(badge = { if (unreadDms > 0) Badge { Text(if (unreadDms > 99) "99+" else unreadDms.toString()) } }) {
-                            GngIcon(GngIcons.ChatBubble, "Messages")
-                        }
-                    }
+                    IconButton(onClick = onNewMessage) { GngIcon(GngIcons.AddComment, "New message") }
                     IconButton(onClick = onSettings) { Avatar(me.displayName, me.avatarUrl, size = 36.dp, colorKey = me.id) }
                 },
                 scrollBehavior = scroll,
             )
         },
         floatingActionButton = {
-            if (!groups.isNullOrEmpty()) {
+            if (!rows.isNullOrEmpty()) {
                 ExtendedFloatingActionButton(
                     onClick = onStart,
                     icon = { GngIcon(GngIcons.Add, null) },
@@ -193,8 +272,8 @@ fun GroupsContent(
         UpdateCard(updateState, updateActions, Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
         PullToRefreshBox(isRefreshing = refreshing, onRefresh = onRefresh, modifier = Modifier.weight(1f)) {
             when {
-                groups == null -> Loading()
-                groups.isEmpty() -> Column(
+                rows == null -> Loading()
+                rows.isEmpty() -> Column(
                     Modifier.fillMaxSize(),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
@@ -214,7 +293,7 @@ fun GroupsContent(
                     Modifier.fillMaxSize().padding(horizontal = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    items(groups, key = { it.id }) { g -> GangCard(g, onClick = { onOpen(g) }) }
+                    items(rows, key = { it.conversation.id }) { row -> ConversationCard(row, onClick = { onOpen(row) }) }
                     item {
                         OutlinedButton(onClick = onJoin, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
                             GngIcon(GngIcons.Key, null, size = 18.dp)
@@ -231,8 +310,10 @@ fun GroupsContent(
 }
 
 @Composable
-private fun GangCard(g: Group, onClick: () -> Unit) {
+private fun ConversationCard(row: ConversationRow, onClick: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
+    val conv = row.conversation
+    val unread = conv.unreadCount > 0
     Card(
         onClick = onClick,
         colors = CardDefaults.cardColors(containerColor = scheme.surfaceContainer),
@@ -240,16 +321,43 @@ private fun GangCard(g: Group, onClick: () -> Unit) {
         modifier = Modifier.fillMaxWidth(),
     ) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            GroupAvatar(g.icon, g.photoUrl, size = 56.dp)
+            if (conv.isDm) Avatar(row.title, row.other?.avatarUrl, size = 56.dp, colorKey = conv.otherUserId ?: conv.id)
+            else GroupAvatar(conv.emoji, conv.photoUrl, size = 56.dp)
             Column(Modifier.padding(horizontal = 16.dp).weight(1f)) {
-                Text(g.name, style = MaterialTheme.typography.titleMedium, maxLines = 1)
-                Spacer(Modifier.height(6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    InfoChip("${g.memberCount} ${if (g.memberCount == 1) "member" else "members"}", icon = GngIcons.PersonFill)
-                    InfoChip(g.inviteCode, icon = GngIcons.Key)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        row.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        fontWeight = if (unread) FontWeight.ExtraBold else null, modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (conv.isMuted) {
+                        Spacer(Modifier.width(6.dp))
+                        GngIcon(GngIcons.NotificationsOff, "Muted", size = 16.dp, tint = scheme.onSurfaceVariant)
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    row.preview,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (unread) scheme.onSurface else scheme.onSurfaceVariant,
+                    fontWeight = if (unread) FontWeight.SemiBold else null,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                conv.lastMessageAt?.let {
+                    Text(
+                        inboxTime(parseInstant(it)), style = MaterialTheme.typography.labelSmall,
+                        color = if (unread) scheme.primary else scheme.onSurfaceVariant,
+                    )
+                }
+                if (unread) {
+                    Badge(containerColor = if (conv.isMuted) scheme.outline else scheme.primary) {
+                        Text(if (conv.unreadCount > 99) "99+" else conv.unreadCount.toString())
+                    }
+                } else {
+                    Spacer(Modifier.height(16.dp))
                 }
             }
-            GngIcon(GngIcons.ChevronRight, null, tint = scheme.onSurfaceVariant)
         }
     }
 }

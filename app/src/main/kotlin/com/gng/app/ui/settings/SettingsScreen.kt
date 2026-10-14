@@ -58,7 +58,16 @@ fun SettingsScreen(me: Profile, onEditProfile: () -> Unit, onTimetable: () -> Un
 
     val updates = c.updates
     val updateState by updates.state.collectAsStateWithLifecycle()
+    val push by c.settings.push.collectAsStateWithLifecycle(true)
+    val previews by c.settings.previews.collectAsStateWithLifecycle(true)
+    val receipts by c.settings.readReceipts.collectAsStateWithLifecycle(true)
     SettingsContent(
+        privacy = PrivacySettings(
+            pushAvailable = c.push.available, push = push, previews = previews, readReceipts = receipts,
+            onPush = { scope.launch { c.settings.setPush(it) } },
+            onPreviews = { scope.launch { c.settings.setPreviews(it) } },
+            onReadReceipts = { scope.launch { c.settings.setReadReceipts(it) } },
+        ),
         updateState = updateState, updateActions = updates.actions(),
         currentVersion = updates.currentVersion, updatesEnabled = updates.enabled,
         me = me, theme = theme, dynamicColor = dynamic,
@@ -67,8 +76,11 @@ fun SettingsScreen(me: Profile, onEditProfile: () -> Unit, onTimetable: () -> Un
         onEditProfile = onEditProfile, onTimetable = onTimetable, onBack = onBack,
         onLogout = {
             scope.launch {
-                // Stop sharing before logging out so nobody sees a stale spot.
+                // Stop sharing before logging out so nobody sees a stale spot,
+                // stop pushes to this phone, and forget the decrypted message cache.
                 runCatching { c.checkIn.setMode(SharingMode.Off) }
+                runCatching { c.push.unregister() }
+                c.cache.wipe()
                 c.auth.signOut()
             }
         },
@@ -91,6 +103,7 @@ fun SettingsContent(
     updateActions: UpdateActions = UpdateActions(),
     currentVersion: String = BuildConfig.VERSION_NAME,
     updatesEnabled: Boolean = true,
+    privacy: PrivacySettings = PrivacySettings(),
 ) {
     val scheme = MaterialTheme.colorScheme
     Scaffold(
@@ -151,6 +164,45 @@ fun SettingsContent(
                 },
             )
 
+            SectionHeader("Notifications & privacy")
+            val clear = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent)
+            ListItem(
+                colors = clear,
+                leadingContent = { GngIcon(GngIcons.Notifications, null) },
+                headlineContent = { Text("Push notifications") },
+                supportingContent = {
+                    Text(
+                        if (privacy.pushAvailable) "Messages and calls, even when gng is closed"
+                        else "Not set up in this build (needs Firebase, see docs/SETUP.md)",
+                    )
+                },
+                trailingContent = {
+                    Switch(checked = privacy.push && privacy.pushAvailable, onCheckedChange = privacy.onPush, enabled = privacy.pushAvailable)
+                },
+            )
+            ListItem(
+                colors = clear,
+                leadingContent = { GngIcon(GngIcons.Visibility, null) },
+                headlineContent = { Text("Message previews") },
+                supportingContent = { Text("Show who said what in notifications") },
+                trailingContent = { Switch(checked = privacy.previews, onCheckedChange = privacy.onPreviews) },
+            )
+            ListItem(
+                colors = clear,
+                leadingContent = { GngIcon(GngIcons.DoneAll, null) },
+                headlineContent = { Text("Send read receipts") },
+                supportingContent = { Text("When off, people see Delivered but not Read") },
+                trailingContent = { Switch(checked = privacy.readReceipts, onCheckedChange = privacy.onReadReceipts) },
+            )
+            ListItem(
+                colors = clear,
+                leadingContent = { GngIcon(GngIcons.Encrypted, null, tint = scheme.primary) },
+                headlineContent = { Text("End-to-end encrypted") },
+                supportingContent = {
+                    Text("Messages, photos, files, stickers and reactions can only be read by the people in the chat. Calls are encrypted phone to phone.")
+                },
+            )
+
             SectionHeader("You")
             ListItem(
                 modifier = Modifier.clickable(onClick = onTimetable),
@@ -192,3 +244,14 @@ fun SettingsContent(
         }
     }
 }
+
+/** The notification and privacy switches; defaults are what a fresh install has. */
+data class PrivacySettings(
+    val pushAvailable: Boolean = true,
+    val push: Boolean = true,
+    val previews: Boolean = true,
+    val readReceipts: Boolean = true,
+    val onPush: (Boolean) -> Unit = {},
+    val onPreviews: (Boolean) -> Unit = {},
+    val onReadReceipts: (Boolean) -> Unit = {},
+)

@@ -18,7 +18,9 @@ Every screen answers a question we already ask in WhatsApp every day:
 | "Snacks at 5?" / "Outing Saturday?" | **Plans** for snacks, outings, study sessions, and anything else |
 | "Whose birthday is next?" | **Birthdays**: countdown list, plus a confetti banner on the day |
 | "When's the midsem?" / "Anyone has notes?" | **Study**: exam radar with a panic meter (🔥🔥🔥), and **the stack** of shared notes/PYQs/links with 🙏 upvotes |
-| "Did you see the chat?" | **Hangout**: realtime group chat with emoji reactions; plans, exams and new notes post themselves into it |
+| "Did you see the chat?" | **Hangout**: end-to-end encrypted group chat with replies, tapbacks, photos, files, stickers and iMessage-style read receipts; plans, exams and new notes post themselves into it |
+| "Can I just text you?" | **DMs**: 1:1 encrypted chats, listed alongside your gangs |
+| "Call?" | **Voice & video calls**: 1:1 in DMs, small group calls (up to ~6) in gangs |
 
 ## 2. Decisions
 
@@ -43,6 +45,26 @@ Location is the one feature that can feel creepy, so the rules are strict:
 
 Spots ("zones") are pinned by the gang itself: stand at the Library, tap **📌 Pin this spot**, name it. A single "DTU campus" zone is seeded so check-ins say *something* before anyone pins finer spots.
 
+## 3b. Privacy model (messages and calls)
+
+* **Everything people write is end-to-end encrypted**: text, photos, files, stickers, replies and reactions.
+  The server stores ciphertext; it can't read any of it.
+* Each phone has an X25519 identity key (Tink HPKE). The private key stays in the phone's keystore-protected storage.
+* Each conversation has **key epochs**: a random AES-256-GCM key, wrapped for every member's public key
+  (`conversation_keys`). Before sending, a phone checks the newest epoch was wrapped for exactly the current members'
+  current keys; if not (someone joined, left or got a new phone) it publishes a new epoch (`publish_epoch()`).
+  So people who leave can't read what comes next, and new members can't read the history from before they joined.
+* Attachments get their own random key, are encrypted before upload to the private `chat-media` bucket,
+  and the key travels inside the encrypted message. The phone checks a SHA-256 before showing a download.
+* **What the server does see** (metadata): who is in which conversation, who sent a message and when, its size,
+  that a reaction changed, delivered/read cursors, and call start/end times. Plans, exams, the notes stack, lunch board,
+  timetables and locations are *not* end-to-end encrypted (they're protected by row-level security, as before).
+* **Verify encryption** (DM ⋮ menu) shows a 60-digit safety code. If it matches on both phones, nobody swapped a key.
+* **Calls** are WebRTC: audio/video is encrypted phone-to-phone (DTLS-SRTP), even through a TURN relay.
+  Supabase only carries the connection handshake, over a private Realtime channel that only the conversation's members can use.
+* **Push** carries only ids. The phone fetches and decrypts the message and writes the notification itself,
+  so Google never sees message content either.
+
 ## 4. Architecture
 
 ```
@@ -50,6 +72,10 @@ Spots ("zones") are pinned by the gang itself: stand at the Library, tap **📌 
 │ ui/        screens + ViewModels (one per tab)             │
 │ data/      repositories over supabase-kt                  │
 │ location/  CheckIn + 15-min WorkManager job               │
+│ crypto/    identity keys, key epochs, AES-GCM (Tink)      │
+│ call/      WebRTC mesh calls, call screen, call service   │
+│ notify/    notifications, FCM push, inline reply          │
+│ data/ChatCache  SQLite cache of decrypted messages        │
 │ core/      pure Kotlin: zones, timetable math, birthdays, │
 │            exam countdowns (unit-tested, no Android deps) │
 └──────────────┬────────────────────────────────────────────┘
@@ -57,14 +83,20 @@ Spots ("zones") are pinned by the gang itself: stand at the Library, tap **📌 
 ┌──────────────▼──────────── Supabase ──────────────────────┐
 │ Auth (email + password)                                   │
 │ Postgres + row-level security (is_member / shares_group)  │
-│ RPCs: create_group, join_group, group_presence            │
+│ RPCs: create_group, join_group, group_presence, open_dm,  │
+│       publish_epoch, mark_seen, my_conversations,         │
+│       start_call, end_call                                │
 │ Triggers: plans/exams/materials → chat messages; auto-RSVP│
-│ Realtime: messages, reactions, plans, rsvps, materials    │
-│ Storage: private `materials` bucket, <group_id>/file      │
+│ Realtime: messages, reactions, receipts, keys, calls, …   │
+│ Storage: private `materials` + `chat-media` buckets       │
+│ Edge Function `push` → FCM (ids only)                     │
 └───────────────────────────────────────────────────────────┘
 ```
 
-* **Schema**: `supabase/migrations/0001_init.sql` (tables, policies, RPCs, triggers, bucket, realtime).
+* **Schema**: `supabase/migrations/0001_init.sql` (tables, policies, RPCs, triggers, bucket, realtime) and
+  `0005_chat.sql` (encrypted DMs, encryption keys, receipts, reactions, push tokens, calls, chat media).
+* **Caching**: decrypted messages and reactions live in an on-device SQLite cache (`ChatCache`), so chats open
+  instantly and work offline; only newer messages are fetched. Sends are optimistic ("Sending…" → "Sent").
 * **Modules**: `:core` is plain Kotlin/JVM so the fiddly logic (zone matching, common free windows, leap-day birthdays) is unit-tested without an emulator. `:app` is the Android app.
 * **No DI framework**: `AppContainer` wires the repositories by hand. That's plenty at this size.
 
@@ -74,7 +106,12 @@ Spots ("zones") are pinned by the gang itself: stand at the Library, tap **📌 
 |---|---|
 | `profiles` | name, emoji avatar, branch, year, birthday, status |
 | `groups`, `group_members` | gangs and who's in them (admin/member) |
-| `messages`, `reactions` | chat; non-text kinds are posted by triggers |
+| `groups.kind` | `gang` or `dm` (a DM is a two-person group with a unique `dm_key`) |
+| `messages`, `reactions` | chat; user text is ciphertext; non-text kinds (plan/exam/call…) are posted by the server |
+| `user_keys`, `conversation_keys` | public identity keys; per-epoch conversation keys wrapped per member |
+| `read_states` | delivered/read cursor per person per conversation (powers Sent → Delivered → Read) |
+| `device_tokens` | FCM tokens for push |
+| `calls` | call start/end; signaling goes over Realtime |
 | `plans`, `plan_rsvps` | lunch / snacks / outing / study / other, with in-maybe-out |
 | `lunch_logs` | one "what I ate" per person per day |
 | `timetable_slots` | weekly classes (ISO weekday, start, end, subject, room) |
@@ -118,20 +155,33 @@ One-to-one chats between people who share a gang, reusing the gang chat's look.
 - **What:** realtime text, reactions, an inbox ordered by recent activity with previews and unread counts.
 - **Privacy:** only the two people can read a conversation (database row-level security). Conversations are created through a function that checks you share a gang. **If you stop sharing any gang with someone, neither of you can send new messages**, but you both keep the history. Leaving a shared gang is the way to cut contact.
 - Gang-level "who can send messages" settings don't apply to DMs.
+- *Replaced in 5f*: DMs are now end-to-end encrypted conversations that sit in the home list next to gangs. The `0004` tables are left in place (nothing is deleted) but the app no longer uses them.
 
 ## 5e. In-app updates
 
 Friends get gng from GitHub Releases, so the app updates itself from there (see [SETUP.md](SETUP.md#updates)): it finds the latest release through GitHub's public API, downloads the APK, verifies it, and hands it to Android's installer. Verification checks the package name, that the version is newer, and that the signing certificate matches the installed app. Android still shows its own "Update" confirmation; silent installs aren't possible outside the Play Store. Only `https://github.com/...` download links are trusted. Version comparison, and turning GitHub's generated release notes into bullets, are unit-tested in `core`.
 
+## 5f. Chat overhaul: encryption, DMs, receipts, media, push, calls
+
+- [x] End-to-end encryption for all chat content (see §3b)
+- [x] DMs in the main list, alongside gangs; unread badges and previews
+- [x] iMessage-style status under your latest message: Sending… → Sent → Delivered → Read 10:42 / Read by Aman, Riya; per-person Info sheet
+- [x] Tapback reactions (one per person, like iMessage); double-tap for ❤️
+- [x] Telegram-style replies: swipe right on a message, tap the quote to jump to the original
+- [x] Photos (compressed, blurred preview while loading, zoomable viewer, save to gallery) and files up to 25 MB
+- [x] Stickers: import from WhatsApp's stickers folder, `.wastickers` packs, images, or "share to gng"; save stickers others send
+- [x] Local message cache, optimistic sending, infinite scroll, catch-up after reconnecting
+- [x] Push notifications with inline reply and mark-as-read; global switch, per-chat mute, preview toggle, read-receipt toggle
+- [x] Voice and video calls: 1:1 and small group (mesh), incoming-call screen over the lock screen
+
 ## 6. Roadmap
 
 **Phase 2: make it sticky**
-- Push notifications (Firebase Cloud Messaging + a Supabase Edge Function): new lunch request, someone RSVP'd to your plan, birthday morning, exam tomorrow
+- More push types: someone RSVP'd to your plan, birthday morning, exam tomorrow
 - Daily birthday post in chat (pg_cron)
-- Images in chat & lunch board photos
-- Push notifications (DMs and gang chat only show when the app is open for now)
+- Lunch board photos
 - Optional: Play Store distribution (internal testing track) for fully automatic background updates
-- Reply threads, mentions (@name), message delete/edit, block or mute someone in DMs, read receipts
+- Mentions (@name), message delete/edit, block someone in DMs, typing indicators, voice notes
 - Polls ("Domino's or Mic Mac?")
 
 **Phase 3: more fun**
@@ -157,3 +207,12 @@ Friends get gng from GitHub Releases, so the app updates itself from there (see 
 - Realtime can't filter DELETE events, so un-reacting and un-RSVPing by *other* people show up on the next refresh rather than instantly.
 - A zone pinned in one gang can appear by name to another gang you're in, if you're standing in it.
 - Lunch board is per-person per-day and visible to all your gangs.
+- **One phone per account** for encryption. Logging in on a new phone creates a new key: chats continue,
+  but older messages can't be decrypted there (shown as 🔒). Same after reinstalling.
+- In a gang, any member holds the conversation key, so a malicious *member* could forge a message that looks like it's
+  from someone else. (Sender signatures would fix this; Signal-style sender keys are the long-term option.)
+- Safety codes are only offered in DMs. In gangs you'd verify each person via your DM with them.
+- Group calls are a mesh: each phone sends its video to everyone else, so beyond ~5–6 people quality drops.
+- Without a TURN server, calls may fail on networks that block peer-to-peer traffic.
+- Read times are exact only for the latest message (receipts are per-person cursors, not per message).
+- People on the old app version can't send messages after `0005_chat.sql` until they update.

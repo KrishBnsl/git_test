@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Downloaded updates live in the app's cache and are shared with the installer through a FileProvider. -->
+<!-- Files in the app's cache that other apps may read through the FileProvider. -->
 <paths>
+    <!-- Downloaded updates, handed to the installer. -->
     <cache-path name="updates" path="updates/" />
+    <!-- Decrypted attachments handed to other apps ("Open with…"). -->
+    <cache-path name="shared" path="shared/" />
 </paths>

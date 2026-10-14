@@ -31,6 +31,22 @@ class SettingsStore(private val context: Context) {
     private val skippedVersionKey = stringPreferencesKey("skipped_update_version")
     private val sharingKey = stringPreferencesKey("sharing")
     private val liveUntilKey = longPreferencesKey("live_until")
+    private val pushKey = booleanPreferencesKey("push")
+    private val previewsKey = booleanPreferencesKey("previews")
+    private val receiptsKey = booleanPreferencesKey("read_receipts")
+
+    /** Push notifications on this phone. Off = the token is removed from the server, so nothing is sent. */
+    val push: Flow<Boolean> = context.dataStore.data.map { it[pushKey] ?: true }
+
+    /** Show who said what in notifications, or just "New message". */
+    val previews: Flow<Boolean> = context.dataStore.data.map { it[previewsKey] ?: true }
+
+    /** Let others see "Read" (like iMessage). Delivered is always shared. */
+    val readReceipts: Flow<Boolean> = context.dataStore.data.map { it[receiptsKey] ?: true }
+
+    suspend fun setPush(on: Boolean) = context.dataStore.edit { it[pushKey] = on }
+    suspend fun setPreviews(on: Boolean) = context.dataStore.edit { it[previewsKey] = on }
+    suspend fun setReadReceipts(on: Boolean) = context.dataStore.edit { it[receiptsKey] = on }
 
     val theme: Flow<ThemeMode> = context.dataStore.data.map { prefs ->
         prefs[themeKey]?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() } ?: ThemeMode.System

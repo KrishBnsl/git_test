@@ -32,13 +32,16 @@ import com.gng.app.update.UpdateInfo
 import com.gng.app.update.UpdateState
 import java.io.File
 import com.gng.app.ui.auth.AuthContent
-import com.gng.app.ui.dm.DmChatContent
-import com.gng.app.ui.dm.DmInboxContent
 import com.gng.app.ui.dm.NewMessageSheet
-import com.gng.app.ui.dm.asMessage
+import com.gng.app.ui.chat.ChatActions
+import com.gng.app.ui.chat.ChatContent
+import com.gng.app.ui.chat.ChatUiState
+import com.gng.app.ui.chat.MediaAccess
+import com.gng.app.ui.chat.Receipt
+import com.gng.app.data.MediaRef
+import com.gng.app.data.ChatMessage
 import com.gng.app.ui.group.AddExamSheet
 import com.gng.app.ui.group.AddMaterialSheet
-import com.gng.app.ui.group.ChatContent
 import com.gng.app.ui.group.EditGroupSheet
 import com.gng.app.ui.group.GroupScaffold
 import com.gng.app.ui.group.GroupSettingsContent
@@ -113,6 +116,20 @@ private fun MapScreen(selected: String?) {
     MapContent(s.ctx, pins, selected, true, {}, { null }, {}, { _, _ -> })
 }
 
+/** The chat with sample messages; your latest message shows as read, like iMessage. */
+@Composable
+private fun Chat(ctx: com.gng.app.ui.group.GroupContext, messages: List<ChatMessage>, reactions: Map<Long, Map<String, String>>) {
+    val noMedia = object : MediaAccess {
+        override fun cached(ref: MediaRef) = null
+        override suspend fun load(ref: MediaRef): File = error("no media in the gallery")
+    }
+    ChatContent(
+        ctx, ChatUiState(messages, reactions, reachedStart = true), noMedia, stickers = null,
+        actions = ChatActions(receiptFor = { Receipt(if (ctx.isDm) "Read 12:38 pm" else "Read by Diya, Esha +2") }),
+        today = SampleData.now.atZone(com.gng.app.data.IST).toLocalDate(),
+    )
+}
+
 @Composable
 private fun Group(tab: GroupTab, content: @Composable () -> Unit) {
     GroupScaffold(SampleData.ctx, null, tab, {}, {}, {}, {}, {}) { content() }
@@ -126,10 +143,10 @@ private fun Screen(name: String) {
         "auth-login" -> AuthContent(false, {}, false, "Wrong email or password", null, {_, _ -> }, "krish@dtu.ac.in")
         "profile-new" -> ProfileForm(null, false, null, {}, {})
         "profile-edit" -> ProfileForm(s.me, false, null, {}, {}, onBack = {})
-        "groups" -> GroupsContent(s.me, 3, s.groups, false, null, {}, {}, {}, {}, {}, {}, {})
-        "groups-empty" -> GroupsContent(s.me, 0, emptyList(), false, null, {}, {}, {}, {}, {}, {}, {})
-        "chat" -> Group(GroupTab.Chat) { ChatContent(s.ctx, s.messages, s.reactions, {}, { _, _ -> }, {}) }
-        "chat-empty" -> Group(GroupTab.Chat) { ChatContent(s.ctx, emptyList(), emptyList(), {}, { _, _ -> }, {}) }
+        "groups" -> GroupsContent(s.me, s.conversations, false, null, {}, {}, {}, {}, {}, {}, {})
+        "groups-empty" -> GroupsContent(s.me, emptyList(), false, null, {}, {}, {}, {}, {}, {}, {})
+        "chat" -> Group(GroupTab.Chat) { Chat(s.ctx, s.messages, s.reactions) }
+        "chat-empty" -> Group(GroupTab.Chat) { Chat(s.ctx, emptyList(), emptyMap()) }
         "plans" -> Group(GroupTab.Plans) {
             PlansContent(s.ctx, s.plans, s.rsvps, s.lunch, Timetable.commonFreeWindows(
                 listOf(s.classes.values.flatten()), java.time.LocalDate.now().dayOfWeek,
@@ -158,19 +175,11 @@ private fun Screen(name: String) {
         "map-empty" -> Group(GroupTab.Map) {
             MapContent(s.ctx, emptyList(), null, true, {}, { null }, {}, { _, _ -> })
         }
-        "chat-locked" -> Group(GroupTab.Chat) { ChatContent(s.memberCtx, s.messages, s.reactions, {}, { _, _ -> }, {}) }
+        "chat-locked" -> Group(GroupTab.Chat) { Chat(s.memberCtx, s.messages, s.reactions) }
         "group-settings" -> GroupSettingsContent(s.ctx, false, null, {}, {}, {}, {}, { _, _ -> }, {}, {}, { _, _ -> }, {})
         "group-settings-member" -> GroupSettingsContent(s.memberCtx, false, null, {}, {}, {}, {}, { _, _ -> }, {}, {}, { _, _ -> }, {})
         "sheet-group-edit" -> EditGroupSheet("Hostel H4 Maggi Club", "restaurant", {}, { _, _ -> })
-        "dm-inbox" -> DmInboxContent(s.me, s.inbox, s.inboxPeople, null, {}, {}, {}, {})
-        "dm-empty" -> DmInboxContent(s.me, emptyList(), emptyMap(), null, {}, {}, {}, {})
-        "dm-chat" -> {
-            val aarav = s.inboxPeople.getValue("u-aarav")
-            DmChatContent(
-                s.me, aarav, "t1", false, null,
-                s.dmWithAarav.map { it.asMessage() }, emptyList(), remember { SnackbarHostState() }, {}, {}, {}, { _, _ -> },
-            )
-        }
+        "dm-chat" -> GroupScaffold(s.dmCtx, null, GroupTab.Chat, {}, {}, {}, {}, {}, onCall = {}) { Chat(s.dmCtx, s.dmWithAarav, emptyMap()) }
         "sheet-new-message" -> NewMessageSheet(s.people.filter { it.id != s.me.id }, {}, {})
         "update-available" -> UpdateDemo(UpdateState.Available(sampleUpdate))
         "update-downloading" -> UpdateDemo(UpdateState.Downloading(sampleUpdate, 0.42f))

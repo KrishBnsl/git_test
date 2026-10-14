@@ -41,8 +41,11 @@ data class Group(
     @SerialName("message_permission") val messagePermission: String = "everyone",
     // Present when selected with `group_members(count)`.
     @SerialName("group_members") val memberRows: List<CountRow> = emptyList(),
+    /** "gang", or "dm" for a two-person direct message. */
+    val kind: String = "gang",
 ) {
     val memberCount: Int get() = memberRows.firstOrNull()?.count ?: 1
+    val isDm get() = kind == "dm"
 }
 
 @Serializable
@@ -50,40 +53,6 @@ data class Member(
     @SerialName("user_id") val userId: String,
     val role: String,
     val profiles: Profile,
-)
-
-@Serializable
-data class Message(
-    val id: Long,
-    @SerialName("group_id") val groupId: String,
-    @SerialName("user_id") val userId: String? = null,
-    val body: String,
-    val kind: String = "text",
-    @SerialName("ref_id") val refId: String? = null,
-    @SerialName("created_at") val createdAt: String,
-) {
-    val createdInstant: Instant get() = parseInstant(createdAt)
-}
-
-@Serializable
-data class NewMessage(
-    @SerialName("group_id") val groupId: String,
-    val body: String,
-)
-
-@Serializable
-data class Reaction(
-    @SerialName("message_id") val messageId: Long,
-    @SerialName("user_id") val userId: String,
-    @SerialName("group_id") val groupId: String,
-    val emoji: String,
-)
-
-@Serializable
-data class NewReaction(
-    @SerialName("message_id") val messageId: Long,
-    @SerialName("group_id") val groupId: String,
-    val emoji: String,
 )
 
 enum class PlanKind(val db: String, val label: String) {
@@ -216,56 +185,6 @@ data class Presence(
     @SerialName("live_until") val liveUntil: String? = null,
     @SerialName("updated_at") val updatedAt: String,
 )
-
-@Serializable
-data class DmThread(
-    val id: String,
-    @SerialName("user_a") val userA: String,
-    @SerialName("user_b") val userB: String,
-)
-
-@Serializable
-data class DmMessage(
-    val id: Long,
-    @SerialName("thread_id") val threadId: String,
-    @SerialName("sender_id") val senderId: String,
-    val body: String,
-    @SerialName("created_at") val createdAt: String,
-)
-
-@Serializable
-data class NewDmMessage(
-    @SerialName("thread_id") val threadId: String,
-    val body: String,
-)
-
-@Serializable
-data class DmReaction(
-    @SerialName("message_id") val messageId: Long,
-    @SerialName("thread_id") val threadId: String,
-    @SerialName("user_id") val userId: String,
-    val emoji: String,
-)
-
-@Serializable
-data class NewDmReaction(
-    @SerialName("message_id") val messageId: Long,
-    @SerialName("thread_id") val threadId: String,
-    val emoji: String,
-)
-
-/** One line of the inbox: the other person, the last message, and how many are unread. */
-@Serializable
-data class DmInboxRow(
-    @SerialName("thread_id") val threadId: String,
-    @SerialName("other_id") val otherId: String,
-    @SerialName("last_body") val lastBody: String? = null,
-    @SerialName("last_sender") val lastSender: String? = null,
-    @SerialName("last_at") val lastAt: String,
-    val unread: Int = 0,
-) {
-    val lastInstant: java.time.Instant get() = parseInstant(lastAt)
-}
 
 object GroupPermission {
     const val MEMBERS = "members"

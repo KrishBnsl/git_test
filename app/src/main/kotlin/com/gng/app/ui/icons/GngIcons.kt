@@ -134,4 +134,19 @@ object GngIcons {
     @DrawableRes val Bolt = R.drawable.ic_bolt
     @DrawableRes val Star = R.drawable.ic_star
     @DrawableRes val StarFill = R.drawable.ic_star_fill
+    @DrawableRes val Call = R.drawable.ic_call
+    @DrawableRes val CallEnd = R.drawable.ic_call_end
+    @DrawableRes val Videocam = R.drawable.ic_videocam
+    @DrawableRes val VideocamOff = R.drawable.ic_videocam_off
+    @DrawableRes val Mic = R.drawable.ic_mic
+    @DrawableRes val MicOff = R.drawable.ic_mic_off
+    @DrawableRes val Cameraswitch = R.drawable.ic_cameraswitch
+    @DrawableRes val VolumeUp = R.drawable.ic_volume_up
+    @DrawableRes val Notifications = R.drawable.ic_notifications
+    @DrawableRes val NotificationsOff = R.drawable.ic_notifications_off
+    @DrawableRes val Mood = R.drawable.ic_mood
+    @DrawableRes val PhotoLibrary = R.drawable.ic_photo_library
+    @DrawableRes val Encrypted = R.drawable.ic_encrypted
+    @DrawableRes val VerifiedUser = R.drawable.ic_verified_user
+    @DrawableRes val Error = R.drawable.ic_error
 }

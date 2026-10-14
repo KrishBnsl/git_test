@@ -5,17 +5,23 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LifecycleEventEffect
 import com.gng.app.data.Profile
-import com.gng.app.ui.dm.DmChatScreen
-import com.gng.app.ui.dm.DmInboxScreen
-import com.gng.app.ui.dm.DmInboxViewModel
-import com.gng.app.ui.gngActivityViewModel
+import com.gng.app.container
+import com.gng.app.ui.components.Loading
+import com.gng.app.ui.friendly
 import com.gng.app.ui.group.GroupHomeScreen
 import com.gng.app.ui.group.GroupSettingsScreen
 import com.gng.app.ui.groups.GroupsScreen
@@ -26,10 +32,23 @@ import com.gng.app.ui.timetable.TimetableScreen
 private const val DURATION = 300
 
 @Composable
-fun MainNav(me: Profile, onProfileSaved: (Profile) -> Unit) {
+fun MainNav(me: Profile, onProfileSaved: (Profile) -> Unit, openGroup: String? = null, onOpened: () -> Unit = {}) {
     val nav = rememberNavController()
-    // Lives as long as the activity, so the unread badge on the home screen is always current.
-    val dmInbox = gngActivityViewModel(key = "dm-inbox-${me.id}") { DmInboxViewModel(it, me.id) }
+    val context = LocalContext.current
+    // Tapped a notification: jump into that chat.
+    LaunchedEffect(openGroup) {
+        if (openGroup != null) {
+            nav.navigate("group/$openGroup") { launchSingleTop = true }
+            onOpened()
+        }
+    }
+    // Ask once for notification permission (Android 13+), so pushes can show.
+    val askNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
     NavHost(
         nav,
         startDestination = "groups",
@@ -40,13 +59,10 @@ fun MainNav(me: Profile, onProfileSaved: (Profile) -> Unit) {
         popExitTransition = { fadeOut(tween(DURATION / 2)) + slideOutHorizontally(tween(DURATION)) { it / 14 } },
     ) {
         composable("groups") {
-            LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { dmInbox.refresh() }
             GroupsScreen(
                 me = me,
-                unreadDms = dmInbox.unread,
                 onOpen = { nav.navigate("group/${it.id}") },
                 onSettings = { nav.navigate("settings") },
-                onMessages = { nav.navigate("dms") },
             )
         }
         composable("group/{groupId}") { entry ->
@@ -69,11 +85,15 @@ fun MainNav(me: Profile, onProfileSaved: (Profile) -> Unit) {
                 onMessage = { nav.navigate("dm/$it") },
             )
         }
-        composable("dms") {
-            DmInboxScreen(me = me, vm = dmInbox, onBack = { nav.popBackStack() }, onOpen = { nav.navigate("dm/$it") })
-        }
+        // "Message" on someone's profile: find or create the DM, then show it like any other chat.
         composable("dm/{userId}") { entry ->
-            DmChatScreen(me = me, otherId = entry.arguments?.getString("userId")!!, onBack = { nav.popBackStack() })
+            OpenDm(
+                userId = entry.arguments?.getString("userId")!!,
+                onOpened = { dmId ->
+                    nav.navigate("group/$dmId") { popUpTo("dm/{userId}") { inclusive = true } }
+                },
+                onBack = { nav.popBackStack() },
+            )
         }
         composable("timetable") { TimetableScreen(me = me, onBack = { nav.popBackStack() }) }
         composable("settings") {
@@ -96,4 +116,18 @@ fun MainNav(me: Profile, onProfileSaved: (Profile) -> Unit) {
             )
         }
     }
+}
+
+@Composable
+private fun OpenDm(userId: String, onOpened: (String) -> Unit, onBack: () -> Unit) {
+    val context = LocalContext.current
+    LaunchedEffect(userId) {
+        runCatching { context.container.chat.openDm(userId) }
+            .onSuccess { onOpened(it.id) }
+            .onFailure {
+                Toast.makeText(context, it.friendly(), Toast.LENGTH_LONG).show()
+                onBack()
+            }
+    }
+    Loading()
 }

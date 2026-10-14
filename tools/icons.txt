@@ -137,3 +137,20 @@ new_releases
 night_shelter
 bolt
 star+
+
+# calls, notifications, encrypted chat
+call
+call_end
+videocam
+videocam_off
+mic
+mic_off
+cameraswitch
+volume_up
+notifications
+notifications_off
+mood
+photo_library
+encrypted
+verified_user
+error

@@ -10,8 +10,10 @@ About 15 minutes, all free.
    Run each file **once**. Running one again fails with `relation ... already exists`, which is harmless.
    Already ran `0001` earlier? Just run `0002`.
    Then run `supabase/migrations/0003_group_settings_and_map.sql` (group photos and permissions, admin roles, map data).
-   Finally run `supabase/migrations/0004_direct_messages.sql` (direct messages).
-   All four can be run again safely if you're unsure whether you did.
+   Then run `supabase/migrations/0004_direct_messages.sql` (the first, plain-text direct messages).
+   Finally run `supabase/migrations/0005_chat.sql` (end-to-end encryption, encrypted DMs, read receipts, media, push, calls).
+   All five can be run again safely if you're unsure whether you did; run them in order.
+   ⚠️ After `0005` the server only accepts encrypted chat messages, so everyone needs the new app. Its first run also resets reactions.
 3. **Authentication → Providers → Email**: keep it enabled.
    For a friends-only app it's easiest to turn **Confirm email** *off*. Otherwise everyone has to click a link in their inbox before logging in.
 4. **Project Settings → API**: copy the **Project URL** and the **anon public** key.
@@ -50,11 +52,53 @@ adb shell am start -n com.gng.app/.debug.GalleryActivity --es screen chat --ez d
 `squad`, `study`, `timetable`, `settings`, or a sheet: `sheet-plan`, `sheet-lunch`, `sheet-gang`, `sheet-join`, `sheet-pin`,
 `sheet-exam`, `sheet-material`, `sheet-class`, `sheet-group-edit`. Also `map`, `map-selected`, `map-empty`,
 `group-settings`, `group-settings-member` (the read-only view a regular member gets), `chat-locked`,
-`dm-inbox`, `dm-empty`, `dm-chat`, `sheet-new-message`, and the update cards `update-available`,
+`dm-chat`, `sheet-new-message`, and the update cards `update-available`,
 `update-downloading`, `update-permission` and `update-failed`. `--ez dark` switches to dark theme and `--ez dynamic` to wallpaper colours.
 The gallery only exists in debug builds; release builds don't contain it.
 
-## 3. Get it onto your friends' phones
+## 3. Push notifications (optional, ~10 minutes)
+
+Without this the app still works; you just only get notified while gng is open.
+
+1. **Firebase**: at [console.firebase.google.com](https://console.firebase.google.com) create a project (no Analytics needed),
+   then **Add app → Android** with package name `com.gng.app`. Download `google-services.json` into `app/`
+   (it's git-ignored). For CI builds, paste its contents into a repo secret named `GOOGLE_SERVICES_JSON`.
+2. **Service account**: Firebase **Project settings → Service accounts → Generate new private key**. Keep that JSON file private.
+3. **Deploy the push function** with the [Supabase CLI](https://supabase.com/docs/guides/cli):
+   ```bash
+   supabase login
+   supabase link --project-ref <your-project-ref>
+   supabase secrets set FIREBASE_SERVICE_ACCOUNT="$(cat path/to/service-account.json)"
+   supabase secrets set WEBHOOK_SECRET="$(openssl rand -hex 32)"   # note this value for step 4
+   supabase functions deploy push --no-verify-jwt
+   ```
+4. **Webhooks**: Supabase dashboard **Database → Webhooks → Create a new hook**, once per row:
+   | Name | Table | Events |
+   |---|---|---|
+   | push-messages | `messages` | Insert |
+   | push-calls | `calls` | Insert, Update |
+
+   For each: type **Supabase Edge Functions**, function `push`, method POST,
+   and add an HTTP header `x-webhook-secret` with the value from step 3.
+5. Rebuild the app. Push can be switched off per phone in **Settings**, and each chat can be muted from its ⋮ menu.
+
+Pushes contain only ids, never message text: the phone downloads and decrypts the message itself before showing it.
+
+## 4. Calls on mobile data (optional)
+
+Calls connect phone-to-phone. On some networks (campus Wi-Fi, some carriers) that's blocked and calls need a relay (a TURN server).
+A free tier is enough for a friend group, e.g. [Metered](https://www.metered.ca/tools/openrelay/) or Cloudflare Calls TURN.
+Add what they give you to `local.properties` (and as repo secrets for CI builds):
+
+```properties
+TURN_URLS=turn:global.relay.metered.ca:80,turns:global.relay.metered.ca:443?transport=tcp
+TURN_USERNAME=...
+TURN_CREDENTIAL=...
+```
+
+The relay only ever sees encrypted audio/video.
+
+## 5. Get it onto your friends' phones
 
 Easiest: let GitHub build it.
 
@@ -62,7 +106,7 @@ Easiest: let GitHub build it.
 2. Every push runs the **Android** workflow. Open the run → **Artifacts → gng-debug-apk**, download it, and send the APK to the group.
 3. On each phone, allow "Install unknown apps" for whatever app opens the APK (Files, WhatsApp, Chrome).
 
-## 4. Signed release APKs
+## 6. Signed release APKs
 
 (Once friends have a build that contains the updater, they never need this page again: see [Updates](#updates) below.)
 
@@ -112,13 +156,17 @@ Things to know:
 - The repo must stay **public**: the app reads the release through GitHub's public API without a token.
 - Update checks are off in debug builds. To test the updater locally, set `UPDATE_API_URL` in `local.properties` to a server that serves GitHub's release JSON (see `UpdateChecker.kt`), and build with `VERSION_CODE=2 VERSION_NAME=9.9.9` for the "new" APK.
 
-## 5. First run
+## 7. First run
 
 1. Sign up, pick your emoji and name, and add your birthday.
 2. **➕ New gang**, then share the 6-letter code (the share icon in the gang's top bar).
 3. Everyone adds their classes: **⋮ → My classes**.
 4. Walk to your usual spots (Library, Mic Mac, hostel, OAT…), go to **Squad → 📌 Pin this spot**. Each spot only needs pinning once per gang.
 5. For automatic check-ins while the app is closed, set the app's location permission to **Allow all the time**.
+6. DMs: tap the **new message** icon at the top of the home screen (or **Message** on someone in Squad, the map or group settings).
+   DMs sit in the same list as your gangs.
+7. Stickers: in any chat tap the smiley in the message box, then **From WhatsApp**, and pick the `WhatsApp Stickers` folder it opens
+   (all the stickers you've ever received on WhatsApp), or import `.wastickers` packs. You can also long-press a sticker someone sent to save it.
 
 ## Notes
 

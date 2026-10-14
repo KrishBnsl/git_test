@@ -41,10 +41,20 @@ jobs:
           fi
           echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
 
+      - name: Firebase config (optional, enables push)
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        if: env.GOOGLE_SERVICES_JSON != ''
+        run: echo "$GOOGLE_SERVICES_JSON" > app/google-services.json
+
       - name: Build signed APK
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          # Optional TURN relay for calls.
+          TURN_URLS: ${{ secrets.TURN_URLS }}
+          TURN_USERNAME: ${{ secrets.TURN_USERNAME }}
+          TURN_CREDENTIAL: ${{ secrets.TURN_CREDENTIAL }}
           RELEASE_KEYSTORE_PATH: ${{ runner.temp }}/release.jks
           RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
           RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
