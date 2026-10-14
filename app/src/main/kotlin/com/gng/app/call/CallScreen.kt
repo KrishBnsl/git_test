@@ -123,8 +123,8 @@ fun CallScreen(calls: CallManager, onClose: () -> Unit) {
         val local = s.localVideo
         if (local != null && s.camOn && s.phase != CallPhase.Ringing) {
             VideoTile(
-                local, calls.eglBase,
-                Modifier.align(Alignment.TopEnd).safeDrawingPadding().padding(12.dp).size(width = 110.dp, height = 160.dp)
+                local, calls.eglBase, onTop = true,
+                modifier = Modifier.align(Alignment.TopEnd).safeDrawingPadding().padding(12.dp).size(width = 110.dp, height = 160.dp)
                     .clip(RoundedCornerShape(16.dp)),
                 mirror = true,
             )
@@ -204,13 +204,15 @@ private fun ParticipantTile(p: Participant, profile: Profile?, egl: EglBase) {
 }
 
 @Composable
-private fun VideoTile(track: VideoTrack, egl: EglBase, modifier: Modifier, mirror: Boolean) {
+private fun VideoTile(track: VideoTrack, egl: EglBase, modifier: Modifier, mirror: Boolean, onTop: Boolean = false) {
     val context = LocalContext.current
     val renderer = remember {
         SurfaceViewRenderer(context).apply {
             init(egl.eglBaseContext, null)
             setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
             setEnableHardwareScaler(true)
+            // Your own small preview must draw above the other person's full-screen video.
+            if (onTop) setZOrderMediaOverlay(true)
         }
     }
     DisposableEffect(renderer) { onDispose { renderer.release() } }

@@ -127,6 +127,11 @@ class CallManager(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val _state = MutableStateFlow<CallUi?>(null)
     val state: StateFlow<CallUi?> = _state.asStateFlow()
+    private val sounds = CallSounds(context)
+
+    init {
+        scope.launch { _state.collect { sounds.update(it) } }
+    }
 
     val eglBase: EglBase by lazy { EglBase.create() }
     private val factory: PeerConnectionFactory by lazy {
@@ -499,7 +504,7 @@ class CallManager(
     private fun upsertParticipant(userId: String, change: (Participant) -> Participant) {
         _state.update { s ->
             s ?: return@update null
-            val existing = s.participants.firstOrNull { it.userId == userId } ?: Participant(userId)
+            val existing = s.participants.firstOrNull { it.userId == userId } ?: Participant(userId, camOn = s.video)
             s.copy(participants = s.participants.filterNot { it.userId == userId } + change(existing))
         }
     }

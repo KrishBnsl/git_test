@@ -520,11 +520,17 @@ private fun StickerPanel(store: StickerStore, onSend: (File) -> Unit) {
 
     val importFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
         tree ?: return@rememberLauncherForActivityResult
-        scope.launch { message = runCatching { store.importWhatsAppFolder(tree) }.fold({ "Added $it stickers from WhatsApp" }, { it.message }) }
+        message = "Looking for stickers…"
+        scope.launch {
+            message = runCatching { store.importWhatsAppFolder(tree) }
+                .onSuccess { if (it.added > 0) selected = "whatsapp" }
+                .fold({ it.describe() }, { it.message ?: "Couldn't read that folder" })
+        }
     }
     val importFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
-        scope.launch { message = runCatching { store.importFiles(uris) }.fold({ "Added $it stickers" }, { it.message }) }
+        message = "Importing…"
+        scope.launch { message = runCatching { store.importFiles(uris) }.fold({ it.describe() }, { it.message ?: "Couldn't import that" }) }
     }
 
     Surface(color = MaterialTheme.colorScheme.surfaceContainer) {

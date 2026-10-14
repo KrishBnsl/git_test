@@ -94,15 +94,16 @@ class MediaRepository(
         PreparedImage(out, bitmap.width, bitmap.height, thumbnail(bitmap))
     }
 
-    /** Stickers are kept as 512px WebP, like WhatsApp's. Already-small WebPs pass through untouched. */
-    suspend fun prepareSticker(bytes: ByteArray, mime: String): ByteArray = withContext(Dispatchers.Default) {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-        require(bounds.outWidth > 0) { "Not a sticker image" }
-        if (mime == "image/webp" && bounds.outWidth <= 512 && bounds.outHeight <= 512 && bytes.size <= 500_000) {
+    /**
+     * Stickers are kept as WebP, like WhatsApp's. WebPs (including animated ones, which the plain
+     * bitmap decoder can't open) are kept exactly as they are; other images become a 512px WebP.
+     */
+    suspend fun prepareSticker(bytes: ByteArray): ByteArray = withContext(Dispatchers.Default) {
+        if (StickerStore.isWebp(bytes)) {
+            require(bytes.size <= 1_500_000) { "Sticker too big" }
             return@withContext bytes
         }
-        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)!!.scaledToFit(512)
+        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.scaledToFit(512) ?: error("Not a sticker image")
         ByteArrayOutputStream().also {
             @Suppress("DEPRECATION")
             val format = if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY else Bitmap.CompressFormat.WEBP
