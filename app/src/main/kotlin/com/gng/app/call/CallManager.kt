@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.util.Log
 import android.os.Build
 import com.gng.app.BuildConfig
 import com.gng.app.data.CallRow
@@ -64,6 +65,8 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
 
+private const val TAG = "gng-call"
+
 enum class CallPhase { Ringing, Calling, Connecting, Active, Ended }
 
 data class Participant(
@@ -94,7 +97,7 @@ data class CallUi(
 private data class Signal(
     val from: String,
     val to: String,
-    val type: String, // offer | answer | ice | bye
+    val type: String, // hello | here | offer | answer | ice | bye
     val sdp: String? = null,
     val candidate: String? = null,
     val mid: String? = null,
@@ -136,6 +139,8 @@ class CallManager(
     }
 
     private val peers = mutableMapOf<String, PeerConnection>()
+    private val meeting = mutableSetOf<String>()
+    private val restarted = mutableSetOf<String>()
     private val pendingIce = mutableMapOf<String, MutableList<IceCandidate>>()
     private val peerLock = Mutex()
     private var channel: RealtimeChannel? = null
@@ -155,10 +160,19 @@ class CallManager(
     /** Starts a call in [groupId] (or joins the one already going there). */
     suspend fun start(groupId: String, title: String, video: Boolean) {
         if (_state.value != null) return
-        val call = client.postgrest.rpc("start_call", buildJsonObject {
-            put("gid", groupId)
-            put("p_video", video)
-        }).decodeAs<CallRow>()
+        // Show "Calling…" straight away; the call row comes back from the server a moment later.
+        _state.value = CallUi("", groupId, title, video, CallPhase.Calling, camOn = video, speakerOn = video)
+        val call = try {
+            client.postgrest.rpc("start_call", buildJsonObject {
+                put("gid", groupId)
+                put("p_video", video)
+            }).decodeAs<CallRow>()
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            Log.w(TAG, "start_call failed", e)
+            dismiss("Couldn't start the call")
+            return
+        }
         join(call, title, outgoing = call.startedBy == myId())
     }
 
@@ -282,22 +296,41 @@ class CallManager(
 
         jobs += scope.launch {
             presence.collect { action ->
-                action.decodeJoinsAs<PresenceState>().filter { it.userId != me }.forEach { p ->
+                val joined = action.decodeJoinsAs<PresenceState>().filter { it.userId != me }
+                joined.forEach { p ->
                     upsertParticipant(p.userId) { it.copy(micOn = p.mic, camOn = p.cam) }
-                    val isNew = peerLock.withLock { p.userId !in peers }
-                    // The person with the smaller id makes the offer, so two people never both do.
-                    if (isNew && me < p.userId) offer(p.userId)
+                    meet(p.userId)
                 }
-                action.decodeLeavesAs<PresenceState>().filter { it.userId != me }.forEach { closePeer(it.userId) }
+                // Updating your status (mute, camera) shows up as a leave plus a join for the same person.
+                // Only a leave without a matching join means they actually left.
+                val stillHere = joined.map { it.userId }.toSet()
+                action.decodeLeavesAs<PresenceState>()
+                    .filter { it.userId != me && it.userId !in stillHere }
+                    .forEach { closePeer(it.userId) }
             }
         }
-        jobs += scope.launch { signals.collect { if (it.to == me) onSignal(it) } }
+        jobs += scope.launch {
+            signals.collect { s ->
+                when {
+                    // Someone just joined and is announcing themselves to everyone.
+                    s.type == "hello" && s.from != me -> {
+                        upsertParticipant(s.from) { it }
+                        meet(s.from)
+                        // If it's their job to make the offer, tell them we're here so they don't wait for presence.
+                        if (me > s.from) runCatching { send(Signal(me, s.from, "here")) }
+                    }
+                    s.to == me -> runCatching { onSignal(s) }.onFailure { Log.w(TAG, "signal ${s.type} from ${s.from} failed", it) }
+                }
+            }
+        }
         jobs += scope.launch {
             callRow.collect { change ->
                 if (change.decodeRecord<CallRow>().endedAt != null) leave(endForEveryone = false, reason = "Call ended")
             }
         }
         trackPresence()
+        // Don't wait for presence to notice us: tell whoever is already here.
+        runCatching { send(Signal(me, "*", "hello")) }
 
         if (outgoing) {
             // Nobody picked up.
@@ -320,11 +353,26 @@ class CallManager(
         }
     }
 
-    private suspend fun offer(userId: String) {
+    /** Starts connecting to [userId] if we aren't already. The smaller id makes the offer, so two people never both do. */
+    private suspend fun meet(userId: String) {
+        val me = myId() ?: return
+        if (me > userId) return // they'll make the offer
+        val claimed = peerLock.withLock { (userId !in peers && userId !in meeting).also { if (it) meeting += userId } }
+        if (claimed) {
+            try {
+                offer(userId)
+            } finally {
+                peerLock.withLock { meeting -= userId }
+            }
+        }
+    }
+
+    private suspend fun offer(userId: String, iceRestart: Boolean = false) {
         val pc = peer(userId)
-        val sdp = pc.createOfferAsync()
+        val sdp = pc.createOfferAsync(iceRestart)
         pc.setLocalAsync(sdp)
         send(Signal(myId()!!, userId, "offer", sdp = sdp.description))
+        Log.d(TAG, "offer -> $userId${if (iceRestart) " (ICE restart)" else ""}")
     }
 
     private suspend fun onSignal(s: Signal) {
@@ -348,6 +396,10 @@ class CallManager(
                 if (pc?.remoteDescription != null) pc.addIceCandidate(candidate)
                 else peerLock.withLock { pendingIce.getOrPut(s.from) { mutableListOf() }.add(candidate) }
             }
+            "here" -> {
+                upsertParticipant(s.from) { it }
+                meet(s.from)
+            }
             "bye" -> closePeer(s.from)
         }
     }
@@ -365,6 +417,7 @@ class CallManager(
         val config = PeerConnection.RTCConfiguration(iceServers()).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
             continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
+            iceCandidatePoolSize = 2
         }
         val pc = factory.createPeerConnection(config, object : PeerConnection.Observer {
             override fun onIceCandidate(candidate: IceCandidate) {
@@ -385,14 +438,31 @@ class CallManager(
                             upsertParticipant(userId) { it.copy(connected = true) }
                             _state.update { it?.copy(phase = CallPhase.Active, connectedAt = it.connectedAt ?: System.currentTimeMillis()) }
                         }
-                        PeerConnection.PeerConnectionState.FAILED -> closePeer(userId)
+                        PeerConnection.PeerConnectionState.FAILED -> {
+                            val me = myId()
+                            // Networks change (Wi-Fi to data, etc.): try once more with fresh routes before giving up.
+                            if (me != null && me < userId && restarted.add(userId)) {
+                                Log.w(TAG, "connection to $userId failed, restarting ICE")
+                                runCatching { offer(userId, iceRestart = true) }
+                            } else if (me != null && me > userId && restarted.add(userId)) {
+                                Log.w(TAG, "connection to $userId failed, waiting for their ICE restart")
+                                delay(8_000)
+                                if (peerLock.withLock { peers[userId] }?.connectionState() != PeerConnection.PeerConnectionState.CONNECTED) {
+                                    closePeer(userId, failed = true)
+                                }
+                            } else {
+                                closePeer(userId, failed = true)
+                            }
+                        }
                         else -> Unit
                     }
                 }
             }
 
             override fun onSignalingChange(state: PeerConnection.SignalingState) = Unit
-            override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) = Unit
+            override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
+                Log.d(TAG, "ice $userId: $state")
+            }
             override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
             override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) = Unit
             override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) = Unit
@@ -407,7 +477,7 @@ class CallManager(
         return pc
     }
 
-    private suspend fun closePeer(userId: String) {
+    private suspend fun closePeer(userId: String, failed: Boolean = false) {
         val pc = peerLock.withLock {
             pendingIce.remove(userId)
             peers.remove(userId)
@@ -415,9 +485,16 @@ class CallManager(
         pc?.dispose()
         _state.update { s -> s?.copy(participants = s.participants.filterNot { it.userId == userId }) }
         val s = _state.value ?: return
-        // Two-person call and the other side left: we're done too.
-        if (s.phase == CallPhase.Active && s.participants.isEmpty()) leave(endForEveryone = true, reason = "Call ended")
+        when {
+            // Two-person call and the other side left: we're done too.
+            s.phase == CallPhase.Active && s.participants.isEmpty() -> leave(endForEveryone = true, reason = "Call ended")
+            // Never managed to connect at all.
+            failed && s.phase != CallPhase.Active && s.participants.isEmpty() ->
+                leave(endForEveryone = true, reason = if (hasTurn) "Couldn't connect" else "Couldn't connect. This network may block calls")
+        }
     }
+
+    private val hasTurn get() = BuildConfig.TURN_URLS.isNotBlank()
 
     private fun upsertParticipant(userId: String, change: (Participant) -> Participant) {
         _state.update { s ->
@@ -449,6 +526,8 @@ class CallManager(
                 peers.values.forEach { it.dispose() }
                 peers.clear()
                 pendingIce.clear()
+                meeting.clear()
+                restarted.clear()
             }
             releaseLocalTracks()
             stopAudio()
@@ -550,8 +629,11 @@ class CallManager(
 
 // --- SDP callbacks as suspend functions ---------------------------------------------------
 
-private suspend fun PeerConnection.createOfferAsync(): SessionDescription = suspendCoroutine { cont ->
-    createOffer(sdpObserver(onCreate = { cont.resume(it) }, onFail = { cont.resumeWithException(IllegalStateException(it)) }), MediaConstraints())
+private suspend fun PeerConnection.createOfferAsync(iceRestart: Boolean = false): SessionDescription = suspendCoroutine { cont ->
+    val constraints = MediaConstraints().apply {
+        if (iceRestart) mandatory.add(MediaConstraints.KeyValuePair("IceRestart", "true"))
+    }
+    createOffer(sdpObserver(onCreate = { cont.resume(it) }, onFail = { cont.resumeWithException(IllegalStateException(it)) }), constraints)
 }
 
 private suspend fun PeerConnection.createAnswerAsync(): SessionDescription = suspendCoroutine { cont ->

@@ -64,7 +64,8 @@ import org.webrtc.VideoTrack
 fun CallScreen(calls: CallManager, onClose: () -> Unit) {
     val call by calls.state.collectAsStateWithLifecycle()
     val s = call ?: run {
-        LaunchedEffect(Unit) { delay(300); onClose() }
+        // Normally the call shows up within a moment; CallActivity closes us when it ends.
+        LaunchedEffect(Unit) { delay(10_000); onClose() }
         Box(Modifier.fillMaxSize().background(Color.Black))
         return
     }
