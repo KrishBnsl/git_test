@@ -23,15 +23,19 @@ val GngFont = FontFamily(
     },
 )
 
-private fun style(size: Int, line: Int, weight: Int, tracking: Float = 0f) = TextStyle(
-    fontFamily = GngFont,
+private fun style(size: Int, line: Int, weight: Int, tracking: Float = 0f, family: FontFamily = GngFont) = TextStyle(
+    fontFamily = family,
     fontSize = size.sp,
     lineHeight = line.sp,
     fontWeight = FontWeight(weight),
     letterSpacing = tracking.em,
 )
 
-/** The Material 3 type scale, set in our typeface with slightly bolder headings. */
+/**
+ * The Material 3 type scale. Headings and titles are set in Plus Jakarta Sans (our look); body text and
+ * labels use the phone's own font (Google Sans / Roboto on most phones), which reads best at chat sizes
+ * and matches the rest of Material You.
+ */
 val GngTypography = Typography(
     displayLarge = style(57, 64, 800, -0.02f),
     displayMedium = style(45, 52, 800, -0.015f),
@@ -42,10 +46,10 @@ val GngTypography = Typography(
     titleLarge = style(22, 28, 700),
     titleMedium = style(16, 24, 600, 0.005f),
     titleSmall = style(14, 20, 600, 0.005f),
-    bodyLarge = style(16, 24, 400, 0.01f),
-    bodyMedium = style(14, 20, 400, 0.015f),
-    bodySmall = style(12, 16, 400, 0.02f),
-    labelLarge = style(14, 20, 600, 0.01f),
-    labelMedium = style(12, 16, 600, 0.04f),
-    labelSmall = style(11, 16, 600, 0.04f),
+    bodyLarge = style(16, 24, 400, 0.005f, FontFamily.Default),
+    bodyMedium = style(14, 20, 400, 0.015f, FontFamily.Default),
+    bodySmall = style(12, 16, 400, 0.025f, FontFamily.Default),
+    labelLarge = style(14, 20, 500, 0.006f, FontFamily.Default),
+    labelMedium = style(12, 16, 500, 0.03f, FontFamily.Default),
+    labelSmall = style(11, 16, 500, 0.04f, FontFamily.Default),
 )

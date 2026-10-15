@@ -70,6 +70,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -143,6 +144,8 @@ data class ChatUiState(
     val incomingRequest: Boolean = false,
     /** You messaged someone outside your gangs and they haven't accepted yet. */
     val outgoingRequest: Boolean = false,
+    /** Your message being edited in the composer. */
+    val editing: ChatMessage? = null,
 )
 
 /** What the chat can do. Defaults do nothing, for previews. */
@@ -167,6 +170,14 @@ data class ChatActions(
     val detailsFor: (ChatMessage) -> List<Pair<String, String>> = { emptyList() },
     val onAcceptRequest: () -> Unit = {},
     val onDeclineRequest: () -> Unit = {},
+    val canEdit: (ChatMessage) -> Boolean = { false },
+    val onEdit: (ChatMessage) -> Unit = {},
+    val onCancelEdit: () -> Unit = {},
+    val canDeleteForEveryone: (ChatMessage) -> Boolean = { false },
+    val onDeleteForEveryone: (ChatMessage) -> Unit = {},
+    val onDeleteForMe: (ChatMessage) -> Unit = {},
+    /** Exact delivered/seen times per person, for the Info sheet. */
+    val loadReceipts: suspend (ChatMessage) -> List<Pair<String, String>> = { emptyList() },
 )
 
 @Composable
@@ -219,6 +230,7 @@ fun ChatScreen(ctx: GroupContext, onOpenEvent: (ChatMessage) -> Unit, onClosed: 
         state = ChatUiState(
             vm.messages, vm.reactions, vm.loaded, vm.reachedStart, vm.uploads, vm.replyTo,
             incomingRequest = vm.incomingRequest, outgoingRequest = vm.outgoingRequest,
+            editing = vm.editing,
         ),
         media = media,
         stickers = c.stickers,
@@ -249,6 +261,13 @@ fun ChatScreen(ctx: GroupContext, onOpenEvent: (ChatMessage) -> Unit, onClosed: 
             detailsFor = vm::detailsFor,
             onAcceptRequest = vm::acceptRequest,
             onDeclineRequest = { vm.declineRequest(onClosed) },
+            canEdit = vm::canEdit,
+            onEdit = vm::startEdit,
+            onCancelEdit = vm::cancelEdit,
+            canDeleteForEveryone = vm::canDeleteForEveryone,
+            onDeleteForEveryone = { vm.deleteForEveryone(it) },
+            onDeleteForMe = { vm.deleteForMe(it) },
+            loadReceipts = vm::exactReceipts,
         ),
     )
 }
@@ -342,6 +361,16 @@ fun ChatContent(
         }
     }
     BackHandler(enabled = stickersOpen) { stickersOpen = false }
+    // Editing: the message's text goes into the box, cursor at the end.
+    LaunchedEffect(state.editing?.id) {
+        val target = state.editing ?: return@LaunchedEffect
+        val text = target.payload.text.orEmpty()
+        draft = TextFieldValue(text, TextRange(text.length))
+        stickersOpen = false
+        runCatching { composerFocus.requestFocus() }
+        keyboard?.show()
+    }
+    var deleting by remember { mutableStateOf<ChatMessage?>(null) }
     // Infinite scroll upwards.
     val nearTop by remember {
         derivedStateOf { (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= listState.layoutInfo.totalItemsCount - 8 }
@@ -428,6 +457,12 @@ fun ChatContent(
             )
         }
         state.replyTo?.let { target -> ReplyBanner(target, ctx, onClose = { actions.onReply(null) }) }
+        state.editing?.let { target ->
+            EditBanner(target, onClose = {
+                actions.onCancelEdit()
+                draft = TextFieldValue("")
+            })
+        }
         if (state.outgoingRequest) RequestNote("Message request sent. ${ctx.title.substringBefore(' ')} sees your messages and can accept.")
         if (state.incomingRequest) {
             RequestBar(ctx, actions.onAcceptRequest, actions.onDeclineRequest)
@@ -454,6 +489,7 @@ fun ChatContent(
                 onDraft = { if (it.text.length <= 4000) draft = it },
                 placeholder = if (ctx.isDm) "Message ${ctx.title.substringBefore(' ')}" else "Message the gang",
                 stickersOpen = stickersOpen,
+                editing = state.editing != null,
                 focusRequester = composerFocus,
                 onToggleStickers = {
                     // Stickers and the keyboard take the same space: show one or the other.
@@ -495,6 +531,17 @@ fun ChatContent(
             onSaveSticker = { m.payload.media?.let(actions.onSaveSticker); actionsFor = null },
             onRetry = { actions.onRetry(m); actionsFor = null },
             onDiscard = { actions.onDiscard(m); actionsFor = null },
+            canEdit = actions.canEdit(m),
+            onEdit = { actions.onEdit(m); actionsFor = null },
+            onDelete = { deleting = m; actionsFor = null },
+        )
+    }
+    deleting?.let { m ->
+        DeleteDialog(
+            forEveryone = actions.canDeleteForEveryone(m),
+            onDismiss = { deleting = null },
+            onDeleteForEveryone = { actions.onDeleteForEveryone(m); deleting = null },
+            onDeleteForMe = { actions.onDeleteForMe(m); deleting = null },
         )
     }
     reactionsFor?.let { m ->
@@ -511,7 +558,9 @@ fun ChatContent(
         }
     }
     infoFor?.let { m ->
-        InfoSheet(m, ctx, actions.receiptFor(m), actions.detailsFor(m), state.reactions[m.id].orEmpty(), onDismiss = { infoFor = null })
+        // Rough statuses straight away, exact times once the server answers.
+        val details by produceState(actions.detailsFor(m), m.id) { value = actions.loadReceipts(m).ifEmpty { value } }
+        InfoSheet(m, ctx, actions.receiptFor(m), details, state.reactions[m.id].orEmpty(), onDismiss = { infoFor = null })
     }
     viewing?.let { ref -> ImageViewer(ref, media, onSave = { actions.onSaveMedia(ref) }, onDismiss = { viewing = null }) }
 }
@@ -574,6 +623,44 @@ private fun RequestBar(ctx: GroupContext, onAccept: () -> Unit, onDecline: () ->
     }
 }
 
+@Composable
+private fun EditBanner(target: ChatMessage, onClose: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    Surface(color = scheme.surfaceContainer) {
+        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            GngIcon(GngIcons.Edit, null, tint = scheme.primary)
+            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                Text("Editing message", style = MaterialTheme.typography.labelMedium, color = scheme.primary)
+                Text(target.payload.text.orEmpty(), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
+            }
+            IconButton(onClick = onClose) { GngIcon(GngIcons.Close, "Cancel edit") }
+        }
+    }
+}
+
+/** WhatsApp's choice: gone for everyone (your messages, for 2 days), or just hidden on this phone. */
+@Composable
+private fun DeleteDialog(forEveryone: Boolean, onDismiss: () -> Unit, onDeleteForEveryone: () -> Unit, onDeleteForMe: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { GngIcon(GngIcons.Delete, null) },
+        title = { Text("Delete message?") },
+        text = {
+            Text(
+                if (forEveryone) "Delete for everyone removes it from everyone's phones and leaves a note that it was deleted."
+                else "It'll be removed from this phone only.",
+            )
+        },
+        confirmButton = {
+            Column(horizontalAlignment = Alignment.End) {
+                if (forEveryone) TextButton(onClick = onDeleteForEveryone) { Text("Delete for everyone") }
+                TextButton(onClick = onDeleteForMe) { Text("Delete for me") }
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        },
+    )
+}
+
 /** Shown instead of the input when an admin has limited who can message. */
 @Composable
 private fun ReadOnlyBar() {
@@ -603,6 +690,7 @@ private fun Composer(
     onSend: () -> Unit,
     focusRequester: FocusRequester = remember { FocusRequester() },
     onFocused: () -> Unit = {},
+    editing: Boolean = false,
 ) {
     val scheme = MaterialTheme.colorScheme
     var attach by remember { mutableStateOf(false) }
@@ -643,7 +731,7 @@ private fun Composer(
         }
         Spacer(Modifier.width(8.dp))
         FilledIconButton(onClick = onSend, enabled = draft.text.isNotBlank(), modifier = Modifier.padding(bottom = 4.dp)) {
-            GngIcon(GngIcons.Send, "Send")
+            if (editing) GngIcon(GngIcons.Check, "Save edit") else GngIcon(GngIcons.Send, "Send")
         }
     }
 }
@@ -821,12 +909,16 @@ private fun MessageActionsSheet(
     onSaveSticker: () -> Unit,
     onRetry: () -> Unit,
     onDiscard: () -> Unit,
+    canEdit: Boolean = false,
+    onEdit: () -> Unit = {},
+    onDelete: () -> Unit = {},
 ) {
     val clipboard = LocalClipboardManager.current
+    val deleted = m.payload.isDeleted
     val scheme = MaterialTheme.colorScheme
     var pickAny by remember { mutableStateOf(false) }
     GngSheet(title = m.payload.preview().take(60).ifBlank { "Message" }, onDismiss = onDismiss) {
-        if (!m.isPending) {
+        if (!m.isPending && !deleted) {
             // Tapbacks, one per person: the usual ones, whatever you reacted with, and + for any emoji.
             val quick = (listOfNotNull(myReaction?.takeIf { it !in QUICK_REACTIONS }) + QUICK_REACTIONS).take(QUICK_REACTIONS.size)
             Surface(shape = RoundedCornerShape(28.dp), color = scheme.surfaceContainerHigh, modifier = Modifier.fillMaxWidth()) {
@@ -851,14 +943,16 @@ private fun MessageActionsSheet(
             SheetAction(GngIcons.Refresh, "Try again", onRetry)
             SheetAction(GngIcons.Delete, "Delete", onDiscard)
         }
-        if (!m.isPending) SheetAction(GngIcons.Reply, "Reply", onReply)
-        if (reactionCount > 0) SheetAction(GngIcons.AddReaction, "Reactions ($reactionCount)", onShowReactions)
-        m.payload.text?.takeIf { it.isNotBlank() }?.let { text ->
+        if (!m.isPending && !deleted) SheetAction(GngIcons.Reply, "Reply", onReply)
+        if (canEdit) SheetAction(GngIcons.Edit, "Edit", onEdit)
+        if (reactionCount > 0 && !deleted) SheetAction(GngIcons.AddReaction, "Reactions ($reactionCount)", onShowReactions)
+        m.payload.text?.takeIf { it.isNotBlank() && !deleted }?.let { text ->
             SheetAction(GngIcons.ContentCopy, "Copy") { clipboard.setText(AnnotatedString(text)); onDismiss() }
         }
         if (m.payload.t == "image") SheetAction(GngIcons.Download, "Save to gallery", onSaveMedia)
         if (m.payload.t == "sticker" && m.userId != ctx.me.id) SheetAction(GngIcons.Star, "Save sticker", onSaveSticker)
-        if (m.userId == ctx.me.id && !m.isPending) SheetAction(GngIcons.Info, "Info", onInfo)
+        if (m.userId == ctx.me.id && !m.isPending && !deleted) SheetAction(GngIcons.Info, "Info", onInfo)
+        if (m.state != SendState.Failed) SheetAction(GngIcons.Delete, "Delete", onDelete)
     }
     if (pickAny) EmojiPickerSheet(onDismiss = { pickAny = false }) { pickAny = false; onReact(it) }
 }

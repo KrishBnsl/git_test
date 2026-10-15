@@ -50,7 +50,10 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
@@ -156,7 +159,7 @@ fun MessageBubble(
                 Text(
                     person.name,
                     style = MaterialTheme.typography.labelMedium,
-                    color = pickAvatarColor(palette, person.key).content,
+                    color = nameColor(pickAvatarColor(palette, person.key).container, scheme.surface, scheme.onSurfaceVariant),
                     modifier = Modifier.padding(start = 52.dp, bottom = 2.dp),
                 )
             }
@@ -166,7 +169,8 @@ fun MessageBubble(
                     else Spacer(Modifier.width(32.dp))
                     Spacer(Modifier.width(8.dp))
                 }
-                Box(Modifier.padding(top = if (reactions.isNotEmpty()) 14.dp else 0.dp)) {
+                // Reactions hang off the bottom edge, so they never cover what was written.
+                Box(Modifier.padding(bottom = if (reactions.isNotEmpty()) 22.dp else 0.dp)) {
                     val clicks = Modifier.combinedClickable(
                         onClick = {
                             when {
@@ -185,8 +189,9 @@ fun MessageBubble(
                     if (reactions.isNotEmpty()) {
                         TapbackBadge(
                             reactions, ctx.me.id,
-                            Modifier.align(if (mine) Alignment.TopStart else Alignment.TopEnd)
-                                .offset(x = if (mine) (-10).dp else 10.dp, y = (-14).dp),
+                            // The pill is ~22dp tall inside a 48dp touch target: this puts its top just over the bubble's edge.
+                            Modifier.align(if (mine) Alignment.BottomEnd else Alignment.BottomStart)
+                                .offset(x = if (mine) (-8).dp else 8.dp, y = 32.dp),
                             onClick = onShowReactions,
                         )
                     }
@@ -204,11 +209,12 @@ fun MessageBubble(
                         GngIcon(GngIcons.Error, null, size = 14.dp, tint = scheme.error)
                         Spacer(Modifier.width(4.dp))
                     }
+                    val stamp = if (m.payload.edited == true) "$time · Edited" else time
                     Text(
-                        if (receipt == null) time else if (receipt.failed || receipt.label == "Sending…") receipt.label else "$time · ${receipt.label}",
+                        if (receipt == null) stamp else if (receipt.failed || receipt.label == "Sending…") receipt.label else "$stamp · ${receipt.label}",
                         style = MaterialTheme.typography.labelSmall,
                         color = if (receipt?.failed == true) scheme.error else scheme.onSurfaceVariant,
-                        fontWeight = if (receipt?.label?.startsWith("Read") == true) FontWeight.SemiBold else null,
+                        fontWeight = if (receipt?.label?.startsWith("Seen") == true) FontWeight.SemiBold else null,
                     )
                 }
             }
@@ -232,40 +238,65 @@ private fun BubbleBody(
 
     if (p.t == "sticker" && p.media != null) {
         Column(modifier.alpha(pendingAlpha), horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
-            p.replyTo?.let { id -> QuoteBlock(p.replyUser, p.replyText, ctx, mine) { onQuoteTap(id) } }
-            EncryptedImage(p.media, media, Modifier.size(150.dp), ContentScale.Fit)
+            // A sticker has no bubble, so its quote gets the received-bubble look either way.
+            p.replyTo?.let { id ->
+                Box(Modifier.widthIn(max = 240.dp).padding(bottom = 4.dp)) { QuoteBlock(p.replyUser, p.replyText, ctx, onBubble = false) { onQuoteTap(id) } }
+            }
+            EncryptedImage(p.media, media, Modifier.size(140.dp), ContentScale.Fit)
+        }
+        return
+    }
+
+    if (p.isDeleted) {
+        Surface(
+            color = Color.Transparent,
+            shape = RoundedCornerShape(20.dp),
+            border = BorderStroke(1.dp, scheme.outlineVariant),
+            modifier = modifier,
+        ) {
+            Row(Modifier.padding(horizontal = 14.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+                GngIcon(GngIcons.Cancel, null, size = 16.dp, tint = scheme.onSurfaceVariant)
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    if (mine) "You deleted this message" else "This message was deleted",
+                    style = MaterialTheme.typography.bodyMedium, fontStyle = FontStyle.Italic, color = scheme.onSurfaceVariant,
+                )
+            }
         }
         return
     }
 
     val big = 20.dp
-    val tight = 5.dp
+    val tight = 6.dp
     val shape = if (mine) {
         RoundedCornerShape(big, if (run.first) big else tight, tight, big)
     } else {
         RoundedCornerShape(if (run.first) big else tight, big, big, tight)
     }
     val taggedMe = !mine && p.mentions(ctx.me.id)
+    // Material You, the way Google Messages does it: yours in your theme's primary colour, theirs neutral.
     Surface(
-        color = if (mine) scheme.primaryContainer else scheme.surfaceContainerHigh,
-        contentColor = if (mine) scheme.onPrimaryContainer else scheme.onSurface,
+        color = if (mine) scheme.primary else scheme.surfaceContainerHigh,
+        contentColor = if (mine) scheme.onPrimary else scheme.onSurface,
         shape = shape,
         // A message that tags you stands out.
         border = if (taggedMe) BorderStroke(1.5.dp, scheme.primary) else null,
-        modifier = modifier.widthIn(max = 300.dp).alpha(pendingAlpha),
+        modifier = modifier.widthIn(max = 296.dp).alpha(pendingAlpha),
     ) {
         Column(Modifier.width(IntrinsicSize.Max)) {
             p.replyTo?.let { id ->
-                Box(Modifier.padding(start = 6.dp, end = 6.dp, top = 6.dp)) {
-                    QuoteBlock(p.replyUser, p.replyText, ctx, mine) { onQuoteTap(id) }
+                // Full width of the bubble, with the same gap on both sides.
+                Box(Modifier.fillMaxWidth().padding(start = 6.dp, end = 6.dp, top = 6.dp)) {
+                    QuoteBlock(p.replyUser, p.replyText, ctx, onBubble = mine) { onQuoteTap(id) }
                 }
             }
             when (p.t) {
                 "image" -> p.media?.let { ref ->
-                    val ratio = ((ref.w ?: 4).toFloat() / (ref.h ?: 3).coerceAtLeast(1)).coerceIn(0.5f, 2f)
+                    // A preview, not the photo: tall shots are cropped to at most 4:5, wide ones to 16:9.
+                    val ratio = ((ref.w ?: 4).toFloat() / (ref.h ?: 3).coerceAtLeast(1)).coerceIn(0.8f, 1.78f)
                     EncryptedImage(
                         ref, media,
-                        Modifier.widthIn(min = 180.dp, max = 300.dp).aspectRatio(ratio).padding(3.dp).clip(RoundedCornerShape(17.dp)),
+                        Modifier.width(232.dp).aspectRatio(ratio).padding(3.dp).clip(RoundedCornerShape(17.dp)),
                         ContentScale.Crop,
                     )
                 }
@@ -283,8 +314,8 @@ private fun BubbleBody(
             if (text != null) {
                 Text(
                     withMentions(text, p.mentions, ctx, mine),
-                    style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                    style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 22.sp),
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                 )
             }
         }
@@ -311,7 +342,7 @@ private fun withMentions(text: String, mentions: List<String>?, ctx: GroupContex
                 addStyle(
                     SpanStyle(
                         fontWeight = FontWeight.Bold,
-                        color = if (mine) scheme.onPrimaryContainer else scheme.primary,
+                        color = if (mine) scheme.onPrimary else scheme.primary,
                         background = if (isMe) scheme.primary.copy(alpha = 0.14f) else androidx.compose.ui.graphics.Color.Unspecified,
                     ),
                     start, end,
@@ -321,21 +352,24 @@ private fun withMentions(text: String, mentions: List<String>?, ctx: GroupContex
     }
 }
 
+/** The quoted message at the top of a reply. [onBubble]: sits on a sent (primary-coloured) bubble. */
 @Composable
-private fun QuoteBlock(userId: String?, text: String?, ctx: GroupContext, mine: Boolean, onClick: () -> Unit) {
+private fun QuoteBlock(userId: String?, text: String?, ctx: GroupContext, onBubble: Boolean, onClick: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
-    val accent = if (mine) scheme.primary else scheme.tertiary
+    val accent = if (onBubble) scheme.onPrimary else scheme.primary
+    val background = if (onBubble) scheme.onPrimary.copy(alpha = 0.16f) else scheme.surfaceContainerHighest
+    val body = if (onBubble) scheme.onPrimary.copy(alpha = 0.85f) else scheme.onSurfaceVariant
     Row(
-        Modifier.clip(RoundedCornerShape(12.dp)).background(scheme.surfaceContainerHighest.copy(alpha = 0.7f))
-            .clickable(onClick = onClick).height(IntrinsicSize.Min).widthIn(min = 120.dp, max = 280.dp),
+        Modifier.fillMaxWidth().widthIn(min = 140.dp).clip(RoundedCornerShape(12.dp)).background(background)
+            .clickable(onClick = onClick).height(IntrinsicSize.Min),
     ) {
-        Box(Modifier.width(3.dp).fillMaxHeight().background(accent))
+        Box(Modifier.width(4.dp).fillMaxHeight().background(accent))
         Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
             Text(
                 if (userId == ctx.me.id) "You" else ctx.nameOf(userId),
                 style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = accent,
             )
-            Text(text.orEmpty(), style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(text.orEmpty(), style = MaterialTheme.typography.bodySmall, color = body, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -455,3 +489,7 @@ fun prettySize(bytes: Long): String = when {
     else -> "$bytes B"
 }
 
+/** A person's colour for their name above their messages, or a plain grey if it wouldn't be readable here. */
+private fun nameColor(color: Color, background: Color, fallback: Color): Color =
+    if (androidx.core.graphics.ColorUtils.calculateContrast(color.copy(alpha = 1f).toArgb(), background.copy(alpha = 1f).toArgb()) >= 3.0) color
+    else fallback

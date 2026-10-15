@@ -15,6 +15,7 @@ import io.github.jan.supabase.realtime.channel
 import io.github.jan.supabase.realtime.decodeRecord
 import io.github.jan.supabase.realtime.postgresChangeFlow
 import io.github.jan.supabase.realtime.realtime
+import io.github.jan.supabase.storage.storage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
@@ -33,6 +34,8 @@ import java.util.UUID
 
 sealed interface LiveEvent {
     data class NewMessage(val row: MessageRow) : LiveEvent
+    /** Edited or deleted. */
+    data class MessageChanged(val row: MessageRow) : LiveEvent
     data class ReactionChanged(val row: ReactionRow) : LiveEvent
     data class Receipt(val state: ReadState) : LiveEvent
     data object KeysChanged : LiveEvent
@@ -53,14 +56,22 @@ class ChatRepository(
 
     suspend fun cached(groupId: String): List<ChatMessage> = cache.latest(groupId)
 
-    /** Pulls everything newer than the cache. Returns the new messages, oldest first. */
+    /**
+     * Pulls everything we haven't synced yet. Returns the new messages, oldest first.
+     *
+     * "Synced up to" is kept separately from the newest message in the cache: messages also land in
+     * the cache live, or when you send one, and taking the newest of those as the sync point used to
+     * skip whatever arrived in between, so those messages vanished from the chat.
+     */
     suspend fun syncNewer(groupId: String, myId: String): List<ChatMessage> = withContext(Dispatchers.IO) {
-        val since = cache.maxId(groupId)
-        val rows = if (since == 0L) {
-            fetch(groupId, desc = true, limit = PAGE).reversed()
+        val markKey = "synced:$groupId"
+        val mark = cache.getRaw(markKey)?.toLongOrNull()
+        val rows = if (mark == null) {
+            // First sync (or first since this fix): take a generous recent window, which also fills any old gaps in it.
+            fetch(groupId, desc = true, limit = REPAIR_WINDOW).reversed()
         } else {
-            val newer = fetch(groupId, afterId = since, limit = MAX_CATCH_UP)
-            // Way behind: drop the stale cache rather than leave a hole in the history.
+            val newer = fetch(groupId, afterId = mark, limit = MAX_CATCH_UP)
+            // Way behind: start the cache over rather than leave a hole in the history.
             if (newer.size >= MAX_CATCH_UP) {
                 cache.clearGroup(groupId)
                 fetch(groupId, desc = true, limit = PAGE).reversed()
@@ -68,16 +79,48 @@ class ChatRepository(
                 newer
             }
         }
+        val decrypted = rows.map { decrypt(it, myId) }
+        cache.put(decrypted)
+        cache.putRaw(markKey, maxOf(mark ?: 0, rows.maxOfOrNull { it.id } ?: 0).toString())
+        decrypted
+    }
+
+    /** Messages edited or deleted since we last looked (realtime catches the rest while a chat is open). */
+    suspend fun syncChanges(groupId: String, myId: String): List<ChatMessage> = withContext(Dispatchers.IO) {
+        val key = "changes:$groupId"
+        val since = cache.getRaw(key)
+        val now = Instant.now().minusSeconds(120).toString() // a little overlap; seeing a change twice is harmless
+        if (since == null) {
+            cache.putRaw(key, now)
+            return@withContext emptyList()
+        }
+        val rows = client.from("messages").select {
+            filter {
+                eq("group_id", groupId)
+                or {
+                    gt("edited_at", since)
+                    gt("deleted_at", since)
+                }
+            }
+        }.decodeList<MessageRow>()
+        cache.putRaw(key, now)
         rows.map { decrypt(it, myId) }.also { cache.put(it) }
     }
 
-    /** Older history for infinite scroll: cache first, then the server. */
-    suspend fun older(groupId: String, beforeId: Long, myId: String): List<ChatMessage> {
-        cache.before(groupId, beforeId).takeIf { it.isNotEmpty() }?.let { return it }
-        return withContext(Dispatchers.IO) {
+    /** Older history for infinite scroll: from the server (so gaps fill in), the cache when offline. */
+    suspend fun older(groupId: String, beforeId: Long, myId: String): List<ChatMessage> = try {
+        withContext(Dispatchers.IO) {
             fetch(groupId, beforeId = beforeId, desc = true, limit = PAGE).reversed().map { decrypt(it, myId) }
                 .also { cache.put(it) }
         }
+    } catch (e: Exception) {
+        if (e is kotlinx.coroutines.CancellationException) throw e
+        cache.before(groupId, beforeId).ifEmpty { throw e }
+    }
+
+    /** Keeps a message that arrived live, so it's there next time without a refetch. */
+    suspend fun remember(m: ChatMessage) {
+        if (m.id > 0) cache.put(listOf(m))
     }
 
     /**
@@ -116,6 +159,7 @@ class ChatRepository(
 
     suspend fun decrypt(row: MessageRow, myId: String): ChatMessage {
         val payload = when {
+            row.deletedAt != null -> Payload("deleted")
             row.kind != "text" -> Payload("event", text = row.body)
             row.ciphertext == null || row.epoch == null -> Payload("legacy", text = row.body)
             else -> {
@@ -126,6 +170,7 @@ class ChatRepository(
                     runCatching {
                         val aad = messageAad(row.groupId, row.epoch, row.userId.orEmpty(), row.clientId.orEmpty())
                         json.decodeFromString<Payload>(Aead.open(key, row.ciphertext.unb64(), aad).decodeToString())
+                            .let { if (row.editedAt != null) it.copy(edited = true) else it }
                     }.getOrDefault(Payload("locked"))
                 }
             }
@@ -167,6 +212,47 @@ class ChatRepository(
     }
 
     suspend fun discard(draft: ChatMessage) = cache.remove(draft.id)
+
+    /** Replaces the text of one of my messages (re-encrypted with the current key). */
+    suspend fun edit(m: ChatMessage, text: String, mentions: List<String>?, myId: String): ChatMessage = withContext(Dispatchers.IO) {
+        val key = e2ee.sendingKey(m.groupId, myId)
+        val payload = m.payload.copy(text = text, mentions = mentions, edited = null)
+        val plaintext = json.encodeToString(Payload.serializer(), payload).toByteArray()
+        val ciphertext = Aead.seal(key.key, plaintext, messageAad(m.groupId, key.epoch, myId, m.clientId.orEmpty())).b64()
+        client.postgrest.rpc("edit_message", buildJsonObject {
+            put("p_id", m.id)
+            put("p_epoch", key.epoch)
+            put("p_ciphertext", ciphertext)
+            if (mentions.isNullOrEmpty()) put("p_mentions", JsonNull)
+            else put("p_mentions", kotlinx.serialization.json.JsonArray(mentions.map { kotlinx.serialization.json.JsonPrimitive(it) }))
+        })
+        m.copy(payload = payload.copy(edited = true)).also { cache.put(listOf(it)) }
+    }
+
+    /** Wipes one of my messages for everyone (the server keeps only "deleted"). */
+    suspend fun deleteForEveryone(m: ChatMessage): ChatMessage = withContext(Dispatchers.IO) {
+        client.postgrest.rpc("delete_message_for_everyone", buildJsonObject { put("p_id", m.id) })
+        // The attachment can't be opened without the key that was in the message, but don't keep it around either.
+        m.payload.media?.path?.let { path -> runCatching { client.storage.from("chat-media").delete(path) } }
+        m.copy(payload = Payload("deleted")).also { cache.put(listOf(it)) }
+    }
+
+    /** Hides a message on this phone only. */
+    suspend fun deleteForMe(m: ChatMessage) {
+        val ids = hiddenIds(m.groupId) + m.id
+        cache.putRaw("hidden:${m.groupId}", ids.joinToString(","))
+        cache.remove(m.id)
+    }
+
+    suspend fun hiddenIds(groupId: String): Set<Long> =
+        cache.getRaw("hidden:$groupId")?.split(',')?.mapNotNull { it.toLongOrNull() }?.toSet().orEmpty()
+
+    /** When each person got and saw [messageId]. */
+    suspend fun receipts(groupId: String, messageId: Long): List<MessageReceipt> =
+        client.postgrest.rpc("message_receipts", buildJsonObject {
+            put("gid", groupId)
+            put("mid", messageId)
+        }).decodeList()
 
     // --- reactions (one tapback per person per message, encrypted) ---------------------
 
@@ -251,6 +337,10 @@ class ChatRepository(
             table = "messages"
             filter("group_id", FilterOperator.EQ, groupId)
         }
+        val edits = channel.postgresChangeFlow<PostgresAction.Update>(schema = "public") {
+            table = "messages"
+            filter("group_id", FilterOperator.EQ, groupId)
+        }
         val reactions = channel.postgresChangeFlow<PostgresAction>(schema = "public") {
             table = "reactions"
             filter("group_id", FilterOperator.EQ, groupId)
@@ -269,6 +359,7 @@ class ChatRepository(
             emitAll(
                 merge(
                     messages.map { LiveEvent.NewMessage(it.decodeRecord<MessageRow>()) },
+                    edits.map { LiveEvent.MessageChanged(it.decodeRecord<MessageRow>()) },
                     reactions.mapNotNull { (it as? HasRecord)?.decodeRecord<ReactionRow>()?.let(LiveEvent::ReactionChanged) },
                     receipts.mapNotNull { (it as? HasRecord)?.decodeRecord<ReadState>()?.let(LiveEvent::Receipt) },
                     keys.map { LiveEvent.KeysChanged },
@@ -362,6 +453,7 @@ class ChatRepository(
 
     private companion object {
         const val PAGE = 60L
+        const val REPAIR_WINDOW = 200L
         const val MAX_CATCH_UP = 500L
         const val KEY_CONVERSATIONS = "conversations"
     }

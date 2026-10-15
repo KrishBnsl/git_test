@@ -125,7 +125,7 @@ private fun Chat(ctx: com.gng.app.ui.group.GroupContext, messages: List<ChatMess
     }
     ChatContent(
         ctx, ChatUiState(messages, reactions, reachedStart = true), noMedia, stickers = null,
-        actions = ChatActions(receiptFor = { Receipt(if (ctx.isDm) "Read 12:38 pm" else "Read by Diya, Esha +2") }),
+        actions = ChatActions(receiptFor = { Receipt(if (ctx.isDm) "Seen 12:38 pm" else "Seen by Diya, Esha +2") }),
         today = SampleData.now.atZone(com.gng.app.data.IST).toLocalDate(),
     )
 }
