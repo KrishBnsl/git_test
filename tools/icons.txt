@@ -154,3 +154,7 @@ photo_library
 encrypted
 verified_user
 error
+
+# invites
+qr_code
+qr_code_scanner

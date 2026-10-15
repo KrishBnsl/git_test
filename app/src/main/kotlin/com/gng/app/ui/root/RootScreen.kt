@@ -112,7 +112,7 @@ class RootViewModel(private val c: AppContainer) : ViewModel() {
 }
 
 @Composable
-fun RootScreen(openGroup: String? = null, onOpened: () -> Unit = {}) {
+fun RootScreen(openGroup: String? = null, onOpened: () -> Unit = {}, inviteCode: String? = null, onInviteHandled: () -> Unit = {}) {
     Surface(Modifier.fillMaxSize()) {
         if (!Supabase.isConfigured) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -135,7 +135,10 @@ fun RootScreen(openGroup: String? = null, onOpened: () -> Unit = {}) {
                 )
             }
             is RootState.NeedsProfile -> ProfileScreen(userId = s.userId, existing = null, onSaved = vm::profileSaved)
-            is RootState.Ready -> MainNav(me = s.me, onProfileSaved = vm::profileSaved, openGroup = openGroup, onOpened = onOpened)
+            is RootState.Ready -> MainNav(
+                me = s.me, onProfileSaved = vm::profileSaved, openGroup = openGroup, onOpened = onOpened,
+                inviteCode = inviteCode, onInviteHandled = onInviteHandled,
+            )
         }
     }
 }

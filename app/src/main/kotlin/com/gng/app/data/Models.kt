@@ -42,6 +42,17 @@ data class PersonCard(
 @Serializable
 data class CountRow(val count: Int)
 
+/** A gang seen through its invite code, before joining. */
+@Serializable
+data class GangPreview(
+    val id: String,
+    val name: String,
+    @SerialName("emoji") val icon: String,
+    @SerialName("photo_url") val photoUrl: String? = null,
+    @SerialName("member_count") val memberCount: Int = 0,
+    @SerialName("already_member") val alreadyMember: Boolean = false,
+)
+
 @Serializable
 data class Group(
     val id: String,

@@ -1,5 +1,10 @@
 package com.gng.app.ui.root
 
+import com.gng.app.ui.invite.JoinGangDialog
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -32,9 +37,32 @@ import com.gng.app.ui.timetable.TimetableScreen
 private const val DURATION = 300
 
 @Composable
-fun MainNav(me: Profile, onProfileSaved: (Profile) -> Unit, openGroup: String? = null, onOpened: () -> Unit = {}) {
+fun MainNav(
+    me: Profile,
+    onProfileSaved: (Profile) -> Unit,
+    openGroup: String? = null,
+    onOpened: () -> Unit = {},
+    inviteCode: String? = null,
+    onInviteHandled: () -> Unit = {},
+) {
     val nav = rememberNavController()
     val context = LocalContext.current
+    // Joining from a QR code, an invite link, or a typed code: show the gang, then join.
+    var joinCode by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(inviteCode) {
+        if (inviteCode != null) {
+            joinCode = inviteCode
+            onInviteHandled()
+        }
+    }
+    joinCode?.let { code ->
+        JoinGangDialog(
+            code,
+            onDismiss = { joinCode = null },
+            onJoined = { g -> joinCode = null; nav.navigate("group/${g.id}") { launchSingleTop = true } },
+            onOpenExisting = { id -> joinCode = null; nav.navigate("group/$id") { launchSingleTop = true } },
+        )
+    }
     // Tapped a notification: jump into that chat.
     LaunchedEffect(openGroup) {
         if (openGroup != null) {
@@ -63,6 +91,7 @@ fun MainNav(me: Profile, onProfileSaved: (Profile) -> Unit, openGroup: String? =
                 me = me,
                 onOpen = { nav.navigate("group/${it.id}") },
                 onSettings = { nav.navigate("settings") },
+                onJoinCode = { joinCode = it },
             )
         }
         composable("group/{groupId}") { entry ->

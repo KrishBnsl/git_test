@@ -129,6 +129,9 @@ dependencies {
     implementation(libs.androidx.emoji.picker)
     // Cutting the subject out of a photo for stickers (model comes via Google Play services).
     implementation(libs.mlkit.subject.segmentation)
+    // Invite QR codes: drawing them, and scanning them with Google's scanner (no camera permission needed).
+    implementation(libs.zxing.core)
+    implementation(libs.play.services.code.scanner)
     implementation(libs.osmdroid)
 
     debugImplementation(libs.androidx.compose.ui.tooling)

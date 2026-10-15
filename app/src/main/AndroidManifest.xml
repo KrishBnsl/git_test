@@ -61,6 +61,19 @@
                 <data android:mimeType="application/zip" />
                 <data android:mimeType="application/octet-stream" />
             </intent-filter>
+                    <!-- Invite links and QR codes: gng://join/CODE, and the web link (which also redirects here). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="gng" android:host="join" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="krishbnsl.github.io" android:pathPrefix="/gng/join" />
+            </intent-filter>
         </activity>
 
         <activity

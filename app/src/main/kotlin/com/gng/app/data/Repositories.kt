@@ -125,6 +125,10 @@ class GroupRepository(private val client: SupabaseClient) {
     suspend fun join(code: String): Group =
         client.postgrest.rpc("join_group", buildJsonObject { put("p_code", code) }).decodeAs()
 
+    /** The gang behind an invite code, to show before joining. Null if no gang has that code. */
+    suspend fun preview(code: String): GangPreview? =
+        client.postgrest.rpc("gang_preview", buildJsonObject { put("p_code", code) }).decodeList<GangPreview>().firstOrNull()
+
     /** With full profiles, except the other side of a message request, who's just a public card. */
     suspend fun members(groupId: String): List<Member> =
         client.postgrest.rpc("group_member_profiles", buildJsonObject { put("gid", groupId) }).decodeList()

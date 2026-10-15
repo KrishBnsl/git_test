@@ -15,7 +15,12 @@ About 15 minutes, all free.
    and `0006_push_triggers.sql` (sends new messages and calls to the push function; see §3).
    Then `0007_mentions.sql` (@mentions), `0008_history_and_push.sql` (chat history for new members and new phones:
    the last 100 messages of a gang, all of a DM; reaction notifications, unread counts in notifications), and
-   `0009_people_and_requests.sql` (@usernames, colleges, finding anyone on gng, Instagram-style message requests).
+   `0009_people_and_requests.sql` (@usernames, colleges, finding anyone on gng, Instagram-style message requests),
+   and `0010_gang_preview.sql` (see a gang before joining it from a QR code or invite link).
+
+   Invite links point at `https://<you>.github.io/gng/join/?c=CODE`, a small page in `web/` that the
+   **Invite page** workflow publishes to GitHub Pages (Settings › Pages › Source: GitHub Actions). It opens gng,
+   or offers the download. If you fork, change `LINK_BASE` in `core/.../InviteCodes.kt` and the host in the manifest.
    All six can be run again safely if you're unsure whether you did; run them in order.
    ⚠️ After `0005` the server only accepts encrypted chat messages, so everyone needs the new app. Its first run also resets reactions.
 3. **Authentication → Providers → Email**: keep it enabled.
