@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Join a gang on gng</title>
+  <meta name="description" content="You've been invited to a gang on gng.">
+  <meta name="robots" content="noindex">
+  <style>
+    :root { --bg: #fdf7ff; --card: #ffffff; --text: #1d1b20; --muted: #49454f; --accent: #6750a4; --on-accent: #ffffff; --line: #e7e0ec; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #141218; --card: #211f26; --text: #e6e0e9; --muted: #cac4d0; --accent: #d0bcff; --on-accent: #381e72; --line: #36343b; } }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px;
+           background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    main { width: 100%; max-width: 380px; background: var(--card); border: 1px solid var(--line); border-radius: 28px; padding: 32px 24px; text-align: center; }
+    h1 { font-size: 24px; margin: 0 0 8px; }
+    p { margin: 0 0 20px; color: var(--muted); }
+    .code { font-size: 28px; letter-spacing: 6px; font-weight: 700; margin: 4px 0 24px; }
+    a.button { display: block; padding: 14px; border-radius: 100px; text-decoration: none; font-weight: 600; margin-top: 12px; }
+    .primary { background: var(--accent); color: var(--on-accent); }
+    .secondary { border: 1px solid var(--line); color: var(--accent); }
+    small { display: block; margin-top: 20px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>You're invited to a gang</h1>
+    <p>Open it in gng to see who's in and join.</p>
+    <div class="code" id="code">······</div>
+    <a class="button primary" id="open" href="#">Open in gng</a>
+    <a class="button secondary" href="https://github.com/KrishBnsl/gng/releases/latest">Get gng for Android</a>
+    <small>No app yet? Install it, then come back to this link, or enter the code in gng › Join a gang.</small>
+  </main>
+  <script>
+    // The code from ?c=ABC123 (letters and digits only).
+    var code = (new URLSearchParams(location.search).get("c") || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
+    var open = document.getElementById("open");
+    if (code.length === 6) {
+      document.getElementById("code").textContent = code;
+      var fallback = encodeURIComponent("https://github.com/KrishBnsl/gng/releases/latest");
+      var intent = "intent://join/" + code + "#Intent;scheme=gng;package=com.gng.app;S.browser_fallback_url=" + fallback + ";end";
+      open.href = /Android/i.test(navigator.userAgent) ? intent : "gng://join/" + code;
+      // On Android, go straight into the app.
+      if (/Android/i.test(navigator.userAgent)) setTimeout(function () { location.href = intent; }, 300);
+    } else {
+      document.getElementById("code").textContent = "—";
+      open.style.display = "none";
+    }
+  </script>
+</body>
+</html>

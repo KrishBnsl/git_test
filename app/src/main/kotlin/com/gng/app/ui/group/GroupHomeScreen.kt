@@ -75,6 +75,7 @@ import com.gng.app.ui.components.Loading
 import com.gng.app.ui.friendly
 import com.gng.app.ui.gngViewModel
 import com.gng.app.ui.icons.GngIcons
+import com.gng.app.ui.invite.InviteSheet
 import kotlinx.coroutines.launch
 
 /** Everything the tabs share: the group and who's in it. */
@@ -286,7 +287,9 @@ fun GroupScaffold(
     val snackbar = remember { SnackbarHostState() }
     var menu by remember { mutableStateOf(false) }
     var confirmLeave by remember { mutableStateOf(false) }
+    var inviting by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    if (inviting && ctx != null) InviteSheet(ctx.group, onDismiss = { inviting = false })
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
@@ -328,15 +331,7 @@ fun GroupScaffold(
                         IconButton(onClick = { onCall(true) }) { GngIcon(GngIcons.Videocam, "Video call") }
                     }
                     if (ctx != null && !dm && onCall == null) {
-                        IconButton(onClick = {
-                            val text = "Join ${ctx.group.name} on gng. Code: ${ctx.group.inviteCode}"
-                            context.startActivity(
-                                Intent.createChooser(
-                                    Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text),
-                                    "Invite the gang",
-                                ),
-                            )
-                        }) { GngIcon(GngIcons.PersonAdd, "Invite") }
+                        IconButton(onClick = { inviting = true }) { GngIcon(GngIcons.QrCode, "Invite") }
                     }
                     Box {
                         IconButton(onClick = { menu = true }) { GngIcon(GngIcons.MoreVert, "More") }
@@ -353,13 +348,7 @@ fun GroupScaffold(
                                         leadingIcon = { GngIcon(GngIcons.PersonAdd, null) },
                                         onClick = {
                                             menu = false
-                                            val text = "Join ${ctx.group.name} on gng. Code: ${ctx.group.inviteCode}"
-                                            context.startActivity(
-                                                Intent.createChooser(
-                                                    Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text),
-                                                    "Invite the gang",
-                                                ),
-                                            )
+                                            inviting = true
                                         },
                                     )
                                 }

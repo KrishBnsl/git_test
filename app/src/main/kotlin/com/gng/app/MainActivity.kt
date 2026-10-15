@@ -17,10 +17,13 @@ import androidx.lifecycle.lifecycleScope
 import com.gng.app.data.ThemeMode
 import com.gng.app.ui.root.RootScreen
 import com.gng.app.ui.theme.GngTheme
+import com.gng.core.InviteCodes
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private var openGroup by mutableStateOf<String?>(null)
+    /** From an invite link or QR code (gng://join/CODE or the https link). Waits through sign-in if needed. */
+    private var inviteCode by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
@@ -31,7 +34,12 @@ class MainActivity : ComponentActivity() {
         setContent {
             val theme by container.settings.theme.collectAsStateWithLifecycle(ThemeMode.System)
             val dynamic by container.settings.dynamicColor.collectAsStateWithLifecycle(true)
-            GngTheme(theme, dynamic) { RootScreen(openGroup = openGroup, onOpened = { openGroup = null }) }
+            GngTheme(theme, dynamic) {
+                RootScreen(
+                    openGroup = openGroup, onOpened = { openGroup = null },
+                    inviteCode = inviteCode, onInviteHandled = { inviteCode = null },
+                )
+            }
         }
     }
 
@@ -42,6 +50,11 @@ class MainActivity : ComponentActivity() {
 
     private fun handle(intent: Intent) {
         intent.getStringExtra(EXTRA_OPEN_GROUP)?.let { openGroup = it }
+        val data = intent.data
+        if (intent.action == Intent.ACTION_VIEW && data != null && (data.scheme == "gng" || data.host == INVITE_HOST)) {
+            InviteCodes.fromScan(data.toString())?.let { inviteCode = it }
+            return
+        }
         // Images or sticker packs shared to gng go into your sticker library.
         val shared: List<Uri> = when (intent.action) {
             Intent.ACTION_SEND -> listOfNotNull(IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java))
@@ -59,5 +72,6 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_OPEN_GROUP = "open_group"
+        private const val INVITE_HOST = "krishbnsl.github.io"
     }
 }

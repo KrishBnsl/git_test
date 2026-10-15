@@ -79,6 +79,8 @@ import com.gng.app.ui.components.SegmentedChoice
 import com.gng.app.ui.friendly
 import com.gng.app.ui.gngViewModel
 import com.gng.app.ui.icons.GngIcons
+import com.gng.app.ui.invite.InviteSheet
+import com.gng.app.ui.invite.shareInvite
 import com.gng.app.ui.icons.GroupIcons
 import com.gng.app.util.AvatarImage
 import kotlinx.coroutines.launch
@@ -178,6 +180,7 @@ fun GroupSettingsContent(
     val scheme = MaterialTheme.colorScheme
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    var showQr by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     var editInfo by remember { mutableStateOf(false) }
     var confirmLeave by remember { mutableStateOf(false) }
@@ -258,6 +261,7 @@ fun GroupSettingsContent(
                 }
 
                 // Invite
+                if (showQr) InviteSheet(group, onDismiss = { showQr = false })
                 SectionHeader("Invite")
                 Card(
                     colors = CardDefaults.cardColors(containerColor = scheme.surfaceContainer),
@@ -274,15 +278,8 @@ fun GroupSettingsContent(
                             cm.setPrimaryClip(ClipData.newPlainText("gng code", group.inviteCode))
                             scope.launch { snackbar.showSnackbar("Code copied") }
                         }) { GngIcon(GngIcons.ContentCopy, "Copy code") }
-                        IconButton(onClick = {
-                            val text = "Join ${group.name} on gng. Code: ${group.inviteCode}"
-                            context.startActivity(
-                                Intent.createChooser(
-                                    Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text),
-                                    "Invite the gang",
-                                ),
-                            )
-                        }) { GngIcon(GngIcons.Share, "Share invite") }
+                        IconButton(onClick = { showQr = true }) { GngIcon(GngIcons.QrCode, "Show QR code") }
+                        IconButton(onClick = { shareInvite(context, group) }) { GngIcon(GngIcons.Share, "Share invite link") }
                     }
                 }
 

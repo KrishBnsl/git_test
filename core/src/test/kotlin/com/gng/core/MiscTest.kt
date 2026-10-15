@@ -36,3 +36,21 @@ class MiscTest {
         assertEquals(false, Presence.isLive(now.minusSeconds(1), now))
     }
 }
+
+class InviteLinkTest {
+    @Test fun `link round-trips through a scan`() {
+        assertEquals("ABC123", InviteCodes.fromScan(InviteCodes.link("ABC123")))
+    }
+
+    @Test fun `reads app links and plain codes`() {
+        assertEquals("ABC123", InviteCodes.fromScan("gng://join/abc123"))
+        assertEquals("ABC123", InviteCodes.fromScan("  abc-123 "))
+        assertEquals("ABC123", InviteCodes.fromScan("https://krishbnsl.github.io/gng/join/?c=abc123&utm=x"))
+    }
+
+    @Test fun `ignores other links and junk`() {
+        assertNull(InviteCodes.fromScan("https://example.com/menu"))
+        assertNull(InviteCodes.fromScan("hello world, this is not a code"))
+        assertNull(InviteCodes.fromScan("https://krishbnsl.github.io/gng/join/?c=TOOLONGCODE"))
+    }
+}

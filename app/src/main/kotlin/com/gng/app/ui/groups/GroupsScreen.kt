@@ -79,6 +79,9 @@ import com.gng.app.ui.update.actions
 import com.gng.app.ui.update.UpdateCard
 import com.gng.app.update.UpdateState
 import com.gng.core.InviteCodes
+import com.gng.app.ui.invite.scanInvite
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.material3.FilledTonalButton
 import kotlinx.coroutines.launch
 
 /** One line of the home list: a gang or a DM, with what to show for it. */
@@ -121,6 +124,7 @@ class GroupsViewModel(private val c: AppContainer, private val me: Profile) : Vi
     }
 
     fun dismissError() { error = null }
+    fun showError(message: String) { error = message }
 
     fun refresh() = viewModelScope.launch {
         refreshing = rows == null
@@ -192,7 +196,9 @@ class GroupsViewModel(private val c: AppContainer, private val me: Profile) : Vi
 }
 
 @Composable
-fun GroupsScreen(me: Profile, onOpen: (Group) -> Unit, onSettings: () -> Unit) {
+fun GroupsScreen(me: Profile, onOpen: (Group) -> Unit, onSettings: () -> Unit, onJoinCode: (String) -> Unit = {}) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val vm = gngViewModel { GroupsViewModel(it, me) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.refresh() }
     var sheet by remember { mutableStateOf<GangSheetMode?>(null) }
@@ -215,7 +221,15 @@ fun GroupsScreen(me: Profile, onOpen: (Group) -> Unit, onSettings: () -> Unit) {
             initial = mode, busy = vm.busy, error = vm.error,
             onDismiss = { sheet = null; vm.dismissError() },
             onCreate = { name, icon -> vm.create(name, icon) { sheet = null; onOpen(it) } },
-            onJoin = { code -> vm.join(code) { sheet = null; onOpen(it) } },
+            // Typed or scanned, show the gang first and join from there.
+            onJoin = { code -> sheet = null; onJoinCode(code) },
+            onScan = {
+                scope.launch {
+                    runCatching { scanInvite(context) }
+                        .onSuccess { code -> if (code != null) { sheet = null; onJoinCode(code) } }
+                        .onFailure { vm.showError(it.message ?: "Couldn't scan that") }
+                }
+            },
         )
     }
     if (picker) {
@@ -419,6 +433,7 @@ fun NewGangSheet(
     onDismiss: () -> Unit,
     onCreate: (name: String, icon: String) -> Unit,
     onJoin: (code: String) -> Unit,
+    onScan: () -> Unit = {},
 ) {
     val scheme = MaterialTheme.colorScheme
     var mode by remember { mutableStateOf(initial) }
@@ -431,7 +446,7 @@ fun NewGangSheet(
         SegmentedChoice(
             choices = listOf(
                 Choice(GangSheetMode.Start, "Start new", GngIcons.Add),
-                Choice(GangSheetMode.Join, "Join with code", GngIcons.Key),
+                Choice(GangSheetMode.Join, "Join", GngIcons.QrCodeScanner),
             ),
             selected = mode, onSelect = { mode = it }, checkIcon = GngIcons.Check,
         )
@@ -446,6 +461,16 @@ fun NewGangSheet(
                 modifier = Modifier.fillMaxWidth(),
             )
         } else {
+            // Scanning a friend's QR code is the quick way in; typing the code still works.
+            FilledTonalButton(onClick = onScan, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                GngIcon(GngIcons.QrCodeScanner, null, size = 20.dp)
+                Spacer(Modifier.width(10.dp))
+                Text("Scan QR code")
+            }
+            Text(
+                "or type the code", style = MaterialTheme.typography.labelMedium, color = scheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
             OutlinedTextField(
                 code, { code = it.take(12) }, label = { Text("6-character code") },
                 leadingIcon = { GngIcon(GngIcons.Key, null) },

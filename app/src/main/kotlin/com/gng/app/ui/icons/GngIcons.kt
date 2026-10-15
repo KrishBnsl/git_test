@@ -149,4 +149,6 @@ object GngIcons {
     @DrawableRes val Encrypted = R.drawable.ic_encrypted
     @DrawableRes val VerifiedUser = R.drawable.ic_verified_user
     @DrawableRes val Error = R.drawable.ic_error
+    @DrawableRes val QrCode = R.drawable.ic_qr_code
+    @DrawableRes val QrCodeScanner = R.drawable.ic_qr_code_scanner
 }
