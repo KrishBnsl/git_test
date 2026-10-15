@@ -35,6 +35,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -130,7 +131,7 @@ class GroupsViewModel(private val c: AppContainer, private val me: Profile) : Vi
                 // These are on the phone now, so senders can see "Delivered".
                 list.forEach { conv ->
                     val last = conv.lastMessageId ?: return@forEach
-                    if (conv.unreadCount > 0 && (markedDelivered[conv.id] ?: 0) < last) {
+                    if (conv.unreadCount > 0 && !conv.isRequestFor(me.id) && (markedDelivered[conv.id] ?: 0) < last) {
                         markedDelivered[conv.id] = last
                         launch { runCatching { c.chat.markSeen(conv.id, last, null) } }
                     }
@@ -143,7 +144,11 @@ class GroupsViewModel(private val c: AppContainer, private val me: Profile) : Vi
     private suspend fun build(list: List<Conversation>): List<ConversationRow> = list.map { conv ->
         val members = c.chat.cachedMembers(conv.id).orEmpty().associate { it.userId to it.profiles }
         val other = conv.otherUserId?.takeIf { conv.isDm }?.let { id ->
-            members[id] ?: profileCache[id] ?: runCatching { c.profiles.get(id) }.getOrNull()?.also { profileCache[id] = it }
+            members[id] ?: profileCache[id]
+                ?: runCatching { c.profiles.get(id) }.getOrNull()?.also { profileCache[id] = it }
+                // Message requests: their full profile is private until accepted, but the card comes with the members.
+                ?: runCatching { c.groups.members(conv.id) }.getOrNull()?.firstOrNull { it.userId == id }?.profiles
+                    ?.also { profileCache[id] = it }
         }
         ConversationRow(conv, if (conv.isDm) other?.displayName ?: "Direct message" else conv.name, preview(conv, members), other)
     }
@@ -166,6 +171,8 @@ class GroupsViewModel(private val c: AppContainer, private val me: Profile) : Vi
     }
 
     fun openDm(userId: String, onDone: (Group) -> Unit) = act(onDone) { c.chat.openDm(userId) }
+
+    suspend fun search(query: String) = c.chat.searchPeople(query)
 
     fun create(name: String, icon: String, onDone: (Group) -> Unit) = act(onDone) { c.groups.create(name, icon) }
 
@@ -193,9 +200,11 @@ fun GroupsScreen(me: Profile, onOpen: (Group) -> Unit, onSettings: () -> Unit) {
 
     val updates = LocalContext.current.container.updates
     val updateState by updates.state.collectAsStateWithLifecycle()
+    val all = vm.rows
     GroupsContent(
         updateState = updateState, updateActions = updates.actions(),
-        me = me, rows = vm.rows, refreshing = vm.refreshing, error = vm.error, onDismissError = vm::dismissError,
+        me = me, rows = all?.filterNot { it.conversation.isRequestFor(me.id) },
+        requests = all.orEmpty().filter { it.conversation.isRequestFor(me.id) }, refreshing = vm.refreshing, error = vm.error, onDismissError = vm::dismissError,
         onRefresh = { vm.refresh() }, onOpen = { onOpen(it.conversation.toGroup()) }, onSettings = onSettings,
         onNewMessage = { vm.loadPeople(); picker = true },
         onStart = { sheet = GangSheetMode.Start }, onJoin = { sheet = GangSheetMode.Join },
@@ -210,9 +219,11 @@ fun GroupsScreen(me: Profile, onOpen: (Group) -> Unit, onSettings: () -> Unit) {
         )
     }
     if (picker) {
-        NewMessageSheet(vm.people, onDismiss = { picker = false }) { userId ->
-            vm.openDm(userId) { picker = false; onOpen(it) }
-        }
+        NewMessageSheet(
+            vm.people, onDismiss = { picker = false },
+            onPick = { userId -> vm.openDm(userId) { picker = false; onOpen(it) } },
+            search = vm::search,
+        )
     }
 }
 
@@ -234,7 +245,10 @@ fun GroupsContent(
     onJoin: () -> Unit,
     updateState: UpdateState = UpdateState.Idle,
     updateActions: UpdateActions = UpdateActions(),
+    /** DMs from people you don't share a gang with, waiting for you to accept. */
+    requests: List<ConversationRow> = emptyList(),
 ) {
+    var showRequests by rememberSaveable { mutableStateOf(false) }
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val snackbar = remember { SnackbarHostState() }
     // Sheet errors show inside the sheet; list errors show as a snackbar.
@@ -273,7 +287,7 @@ fun GroupsContent(
         PullToRefreshBox(isRefreshing = refreshing, onRefresh = onRefresh, modifier = Modifier.weight(1f)) {
             when {
                 rows == null -> Loading()
-                rows.isEmpty() -> Column(
+                rows.isEmpty() && requests.isEmpty() -> Column(
                     Modifier.fillMaxSize(),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
@@ -293,6 +307,14 @@ fun GroupsContent(
                     Modifier.fillMaxSize().padding(horizontal = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
+                    if (requests.isNotEmpty()) {
+                        item(key = "requests") {
+                            RequestsHeader(requests.size, showRequests) { showRequests = !showRequests }
+                        }
+                        if (showRequests) {
+                            items(requests, key = { "r" + it.conversation.id }) { row -> ConversationCard(row, onClick = { onOpen(row) }) }
+                        }
+                    }
                     items(rows, key = { it.conversation.id }) { row -> ConversationCard(row, onClick = { onOpen(row) }) }
                     item {
                         OutlinedButton(onClick = onJoin, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
@@ -305,6 +327,29 @@ fun GroupsContent(
                 }
             }
         }
+        }
+    }
+}
+
+@Composable
+private fun RequestsHeader(count: Int, open: Boolean, onClick: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    Card(
+        onClick = onClick,
+        colors = CardDefaults.cardColors(containerColor = scheme.secondaryContainer),
+        shape = MaterialTheme.shapes.large,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            GngIcon(GngIcons.Mail, null, tint = scheme.onSecondaryContainer)
+            Column(Modifier.padding(horizontal = 16.dp).weight(1f)) {
+                Text("Message requests", style = MaterialTheme.typography.titleMedium, color = scheme.onSecondaryContainer)
+                Text(
+                    "$count ${if (count == 1) "person wants" else "people want"} to message you",
+                    style = MaterialTheme.typography.bodySmall, color = scheme.onSecondaryContainer,
+                )
+            }
+            GngIcon(if (open) GngIcons.ExpandMore else GngIcons.ChevronRight, null, tint = scheme.onSecondaryContainer)
         }
     }
 }
@@ -351,8 +396,12 @@ private fun ConversationCard(row: ConversationRow, onClick: () -> Unit) {
                     )
                 }
                 if (unread) {
-                    Badge(containerColor = if (conv.isMuted) scheme.outline else scheme.primary) {
-                        Text(if (conv.unreadCount > 99) "99+" else conv.unreadCount.toString())
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        // Someone tagged you here: always shown, even when the chat is muted.
+                        if (conv.unreadMentions > 0) Badge(containerColor = scheme.primary) { Text("@") }
+                        Badge(containerColor = if (conv.isMuted) scheme.outline else scheme.primary) {
+                            Text(if (conv.unreadCount > 99) "99+" else conv.unreadCount.toString())
+                        }
                     }
                 } else {
                     Spacer(Modifier.height(16.dp))

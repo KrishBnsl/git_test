@@ -43,7 +43,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -100,8 +106,10 @@ fun MessageBubble(
     onOpenImage: (MediaRef) -> Unit,
     onOpenFile: (MediaRef) -> Unit,
     onRetry: () -> Unit,
+    onShowReactions: () -> Unit = {},
 ) {
     val scheme = MaterialTheme.colorScheme
+    val haptics = LocalHapticFeedback.current
     val palette = remember(scheme) { avatarColors(scheme) }
     val oneToOne = ctx.isDm
     val person = ctx.person(m.userId)
@@ -125,7 +133,11 @@ fun MessageBubble(
                     onDragCancel = { scope.launch { swipe.animateTo(0f) } },
                     onHorizontalDrag = { change, amount ->
                         change.consume()
-                        scope.launch { swipe.snapTo((swipe.value + amount).coerceIn(0f, maxSwipe)) }
+                        val before = swipe.value
+                        val after = (before + amount).coerceIn(0f, maxSwipe)
+                        // A tick when you've pulled far enough to reply.
+                        if (before <= maxSwipe * 0.7f && after > maxSwipe * 0.7f) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        scope.launch { swipe.snapTo(after) }
                     },
                 )
             },
@@ -164,7 +176,10 @@ fun MessageBubble(
                             }
                         },
                         onDoubleClick = onDoubleTap,
-                        onLongClick = onLongPress,
+                        onLongClick = {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onLongPress()
+                        },
                     )
                     BubbleBody(m, ctx, mine, run, media, clicks, onQuoteTap)
                     if (reactions.isNotEmpty()) {
@@ -172,6 +187,7 @@ fun MessageBubble(
                             reactions, ctx.me.id,
                             Modifier.align(if (mine) Alignment.TopStart else Alignment.TopEnd)
                                 .offset(x = if (mine) (-10).dp else 10.dp, y = (-14).dp),
+                            onClick = onShowReactions,
                         )
                     }
                 }
@@ -229,10 +245,13 @@ private fun BubbleBody(
     } else {
         RoundedCornerShape(if (run.first) big else tight, big, big, tight)
     }
+    val taggedMe = !mine && p.mentions(ctx.me.id)
     Surface(
         color = if (mine) scheme.primaryContainer else scheme.surfaceContainerHigh,
         contentColor = if (mine) scheme.onPrimaryContainer else scheme.onSurface,
         shape = shape,
+        // A message that tags you stands out.
+        border = if (taggedMe) BorderStroke(1.5.dp, scheme.primary) else null,
         modifier = modifier.widthIn(max = 300.dp).alpha(pendingAlpha),
     ) {
         Column(Modifier.width(IntrinsicSize.Max)) {
@@ -255,7 +274,7 @@ private fun BubbleBody(
                     GngIcon(GngIcons.Lock, null, size = 16.dp)
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        "Can't decrypt this one (sent before you joined, or to your old phone)",
+                        "Waiting for this message. It unlocks when someone in the chat opens gng.",
                         style = MaterialTheme.typography.bodyMedium, modifier = Modifier.alpha(0.8f),
                     )
                 }
@@ -263,9 +282,39 @@ private fun BubbleBody(
             val text = p.text?.takeIf { p.t == "text" || p.t == "legacy" || p.t == "image" }
             if (text != null) {
                 Text(
-                    text,
+                    withMentions(text, p.mentions, ctx, mine),
                     style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                )
+            }
+        }
+    }
+}
+
+/** Highlights each "@Name" that really is a tag (not just someone typing an @). */
+@Composable
+private fun withMentions(text: String, mentions: List<String>?, ctx: GroupContext, mine: Boolean): AnnotatedString {
+    if (mentions.isNullOrEmpty()) return AnnotatedString(text)
+    val scheme = MaterialTheme.colorScheme
+    return remember(text, mentions, ctx.members, scheme) {
+        val spans = mentions.mapNotNull { id ->
+            val name = ctx.members[id]?.displayName ?: return@mapNotNull null
+            val needle = "@$name"
+            generateSequence(text.indexOf(needle)) { prev -> text.indexOf(needle, prev + needle.length).takeIf { it >= 0 } }
+                .takeWhile { it >= 0 }
+                .map { start -> Triple(start, start + needle.length, id == ctx.me.id) }
+                .toList()
+        }.flatten().sortedBy { it.first }
+        buildAnnotatedString {
+            append(text)
+            spans.forEach { (start, end, isMe) ->
+                addStyle(
+                    SpanStyle(
+                        fontWeight = FontWeight.Bold,
+                        color = if (mine) scheme.onPrimaryContainer else scheme.primary,
+                        background = if (isMe) scheme.primary.copy(alpha = 0.14f) else androidx.compose.ui.graphics.Color.Unspecified,
+                    ),
+                    start, end,
                 )
             }
         }
@@ -291,10 +340,12 @@ private fun QuoteBlock(userId: String?, text: String?, ctx: GroupContext, mine: 
     }
 }
 
+/** The little reaction pill on a bubble. Tap it to see who reacted. */
 @Composable
-private fun TapbackBadge(reactions: Map<String, String>, myId: String, modifier: Modifier) {
+private fun TapbackBadge(reactions: Map<String, String>, myId: String, modifier: Modifier, onClick: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
     Surface(
+        onClick = onClick,
         shape = CircleShape,
         color = if (myId in reactions) scheme.secondaryContainer else scheme.surfaceContainerHighest,
         shadowElevation = 2.dp,

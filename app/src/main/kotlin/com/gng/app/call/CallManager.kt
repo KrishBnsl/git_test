@@ -51,8 +51,10 @@ import org.webrtc.EglBase
 import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
 import org.webrtc.MediaStream
+import org.webrtc.MediaStreamTrack
 import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionFactory
+import org.webrtc.RtpParameters
 import org.webrtc.RtpReceiver
 import org.webrtc.RtpTransceiver
 import org.webrtc.SdpObserver
@@ -75,6 +77,8 @@ data class Participant(
     val micOn: Boolean = true,
     val camOn: Boolean = false,
     val connected: Boolean = false,
+    /** Was connected, lost the connection, and we're trying to get it back. */
+    val reconnecting: Boolean = false,
 )
 
 data class CallUi(
@@ -136,16 +140,24 @@ class CallManager(
     val eglBase: EglBase by lazy { EglBase.create() }
     private val factory: PeerConnectionFactory by lazy {
         PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions.builder(context).createInitializationOptions())
+        val audioModule = JavaAudioDeviceModule.builder(context)
+            // The phone's own echo cancelling and noise suppression, where it has them (most do, and they beat software).
+            .setUseHardwareAcousticEchoCanceler(true)
+            .setUseHardwareNoiseSuppressor(true)
+            .setUseLowLatency(true)
+            .createAudioDeviceModule()
         PeerConnectionFactory.builder()
-            .setVideoEncoderFactory(DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, true))
+            // No H.264 High profile: some phones' hardware decoders can't play it, which shows up
+            // as video working in only one direction. VP8 is preferred anyway (see preferVp8).
+            .setVideoEncoderFactory(DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, false))
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase.eglBaseContext))
-            .setAudioDeviceModule(JavaAudioDeviceModule.builder(context).createAudioDeviceModule())
+            .setAudioDeviceModule(audioModule)
             .createPeerConnectionFactory()
     }
 
     private val peers = mutableMapOf<String, PeerConnection>()
     private val meeting = mutableSetOf<String>()
-    private val restarted = mutableSetOf<String>()
+    private val iceRestarts = mutableMapOf<String, Int>()
     private val pendingIce = mutableMapOf<String, MutableList<IceCandidate>>()
     private val peerLock = Mutex()
     private var channel: RealtimeChannel? = null
@@ -194,6 +206,7 @@ class CallManager(
         ringing = call
         ringingIsDm = isDm
         _state.value = CallUi(call.id, call.groupId, title, call.video, CallPhase.Ringing, incomingFrom = caller, camOn = call.video)
+        prewarm()
         scope.launch {
             delay(Notifier.RING_TIMEOUT_MS)
             if (_state.value?.phase == CallPhase.Ringing && _state.value?.callId == call.id) dismiss("Missed call")
@@ -230,6 +243,11 @@ class CallManager(
         }
     }
 
+    /** Loads WebRTC in the background while the phone rings, so answering connects faster. */
+    private fun prewarm() {
+        scope.launch(Dispatchers.Default) { runCatching { factory } }
+    }
+
     // --- in-call controls ---------------------------------------------------------------
 
     fun toggleMic() {
@@ -239,13 +257,36 @@ class CallManager(
         scope.launch { trackPresence() }
     }
 
+    /** Turns your camera on or off. Works in voice calls too (the call becomes a video call). */
     fun toggleCamera() {
-        val track = videoTrack ?: return
-        val on = !(_state.value?.camOn ?: true)
-        track.setEnabled(on)
-        if (on) runCatching { capturer?.startCapture(1280, 720, 30) } else runCatching { capturer?.stopCapture() }
-        _state.update { it?.copy(camOn = on) }
+        val s = _state.value ?: return
+        val track = videoTrack
+        if (track == null || !s.camOn) {
+            scope.launch { enableCamera() }
+            return
+        }
+        track.setEnabled(false)
+        runCatching { capturer?.stopCapture() }
+        _state.update { it?.copy(camOn = false) }
         scope.launch { trackPresence() }
+    }
+
+    /**
+     * Starts the camera and sends it to everyone in the call. Also used when the camera permission
+     * is granted after the call already started (e.g. answering from the notification).
+     */
+    suspend fun enableCamera() {
+        val s = _state.value ?: return
+        if (s.phase == CallPhase.Ended || s.phase == CallPhase.Ringing) return
+        val track = videoTrack ?: withContext(Dispatchers.Default) { createVideoTrack() } ?: return
+        track.setEnabled(true)
+        if (capturer != null) runCatching { capturer?.startCapture(CAPTURE_W, CAPTURE_H, CAPTURE_FPS) }
+        val pcs = peerLock.withLock { peers.values.toList() }
+        pcs.forEach { pc -> attachLocal(pc) }
+        val wasVoice = !s.video
+        _state.update { it?.copy(video = true, camOn = true, localVideo = track) }
+        if (wasVoice && !(_state.value?.speakerOn ?: false)) toggleSpeaker()
+        trackPresence()
     }
 
     fun flipCamera() {
@@ -280,9 +321,9 @@ class CallManager(
             phase = if (outgoing) CallPhase.Calling else CallPhase.Connecting,
             camOn = call.video, speakerOn = call.video,
         )
-        withContext(Dispatchers.Default) { createLocalTracks(call.video) }
-        _state.update { it?.copy(localVideo = videoTrack) }
         startAudio(speaker = call.video)
+        withContext(Dispatchers.Default) { createLocalTracks(call.video) }
+        _state.update { it?.copy(localVideo = videoTrack, camOn = videoTrack != null) }
         CallService.start(context)
 
         val ch = client.channel("call:${call.id}") {
@@ -334,14 +375,21 @@ class CallManager(
             }
         }
         trackPresence()
-        // Don't wait for presence to notice us: tell whoever is already here.
-        runCatching { send(Signal(me, "*", "hello")) }
+        // Don't wait for presence to notice us: tell whoever is already here. Broadcasts aren't
+        // guaranteed, so keep saying hello until someone answers.
+        jobs += scope.launch {
+            repeat(15) {
+                if (_state.value?.participants?.any { it.connected } == true) return@launch
+                runCatching { send(Signal(me, "*", "hello")) }
+                delay(3_000)
+            }
+        }
 
         if (outgoing) {
             // Nobody picked up.
             jobs += scope.launch {
                 delay(Notifier.RING_TIMEOUT_MS)
-                if (_state.value?.participants.isNullOrEmpty()) leave(endForEveryone = true, reason = "No answer")
+                if (_state.value?.participants?.none { it.connected } != false) leave(endForEveryone = true, reason = "No answer")
             }
         }
     }
@@ -353,7 +401,7 @@ class CallManager(
             channel?.track(buildJsonObject {
                 put("user_id", me)
                 put("mic", s.micOn)
-                put("cam", s.video && s.camOn)
+                put("cam", s.camOn && videoTrack != null)
             })
         }
     }
@@ -374,26 +422,123 @@ class CallManager(
 
     private suspend fun offer(userId: String, iceRestart: Boolean = false) {
         val pc = peer(userId)
+        if (pc.transceivers.isEmpty()) {
+            // One audio and one video slot, both ways, from the start. The camera can then be
+            // switched on at any point without renegotiating.
+            val init = { RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.SEND_RECV, listOf(STREAM)) }
+            pc.addTransceiver(MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO, init())
+            pc.addTransceiver(MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO, init())
+        }
+        attachLocal(pc)
         val sdp = pc.createOfferAsync(iceRestart)
         pc.setLocalAsync(sdp)
+        tuneSenders(pc)
         send(Signal(myId()!!, userId, "offer", sdp = sdp.description))
         Log.d(TAG, "offer -> $userId${if (iceRestart) " (ICE restart)" else ""}")
+        // Signals can get lost: offer again until they answer.
+        jobs += scope.launch {
+            repeat(3) {
+                delay(4_000)
+                val current = peerLock.withLock { peers[userId] } ?: return@launch
+                if (current !== pc || pc.signalingState() != PeerConnection.SignalingState.HAVE_LOCAL_OFFER) return@launch
+                val local = pc.localDescription ?: return@launch
+                Log.d(TAG, "no answer from $userId yet, offering again")
+                runCatching { send(Signal(myId()!!, userId, "offer", sdp = local.description)) }
+            }
+        }
+    }
+
+    /** Puts our mic and camera on [pc]'s audio and video slots, sending both ways. */
+    private fun attachLocal(pc: PeerConnection) {
+        pc.transceivers.forEach { t ->
+            if (t.isStopped) return@forEach
+            when (t.mediaType) {
+                MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO -> audioTrack?.let { if (t.sender.track() !== it) t.sender.setTrack(it, false) }
+                MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO -> {
+                    videoTrack?.let { if (t.sender.track() !== it) t.sender.setTrack(it, false) }
+                    preferVp8(t)
+                }
+                else -> Unit
+            }
+            if (t.direction != RtpTransceiver.RtpTransceiverDirection.SEND_RECV) t.setDirection(RtpTransceiver.RtpTransceiverDirection.SEND_RECV)
+            t.sender.setStreams(listOf(STREAM))
+        }
+        tuneSenders(pc)
+    }
+
+    /** VP8 first: every phone can decode it, unlike some hardware H.264 streams. */
+    private fun preferVp8(t: RtpTransceiver) {
+        runCatching {
+            val codecs = factory.getRtpReceiverCapabilities(MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO).codecs
+            t.setCodecPreferences(codecs.sortedBy { c ->
+                when (c.name.uppercase()) {
+                    "VP8" -> 0
+                    "VP9" -> 1
+                    "H264" -> 2
+                    "RTX", "RED", "ULPFEC", "FLEXFEC-03" -> 9
+                    else -> 5
+                }
+            })
+        }
+    }
+
+    /** Good video without choking the network: a bitrate cap that suits the call size, and keep the frame rate smooth. */
+    private fun tuneSenders(pc: PeerConnection) {
+        val people = (_state.value?.participants?.size ?: 1).coerceAtLeast(1)
+        val maxVideo = when {
+            people <= 1 -> 1_800_000
+            people <= 3 -> 900_000
+            else -> 500_000
+        }
+        pc.senders.forEach { sender ->
+            val track = sender.track() ?: return@forEach
+            runCatching {
+                val params = sender.parameters
+                if (params.encodings.isEmpty()) return@runCatching
+                if (track.kind() == MediaStreamTrack.VIDEO_TRACK_KIND) {
+                    params.degradationPreference = RtpParameters.DegradationPreference.BALANCED
+                    params.encodings.forEach {
+                        it.maxBitrateBps = maxVideo
+                        it.maxFramerate = CAPTURE_FPS
+                    }
+                } else {
+                    // Voice first: when the network struggles, audio gets the bandwidth.
+                    params.encodings.forEach {
+                        it.maxBitrateBps = 64_000
+                        it.bitratePriority = 4.0
+                        it.networkPriority = 3
+                    }
+                }
+                sender.setParameters(params)
+            }
+        }
     }
 
     private suspend fun onSignal(s: Signal) {
         when (s.type) {
             "offer" -> {
                 val pc = peer(s.from)
+                // The same offer again (our answer got lost): just answer again.
+                val local = pc.localDescription
+                if (pc.remoteDescription?.description == s.sdp && local != null && pc.signalingState() == PeerConnection.SignalingState.STABLE) {
+                    send(Signal(myId()!!, s.from, "answer", sdp = local.description))
+                    return
+                }
                 pc.setRemoteAsync(SessionDescription(SessionDescription.Type.OFFER, s.sdp))
+                attachLocal(pc)
                 flushIce(s.from, pc)
                 val answer = pc.createAnswerAsync()
                 pc.setLocalAsync(answer)
+                tuneSenders(pc)
                 send(Signal(myId()!!, s.from, "answer", sdp = answer.description))
             }
             "answer" -> {
                 val pc = peerLock.withLock { peers[s.from] } ?: return
+                // A late duplicate of an answer we already applied.
+                if (pc.signalingState() != PeerConnection.SignalingState.HAVE_LOCAL_OFFER) return
                 pc.setRemoteAsync(SessionDescription(SessionDescription.Type.ANSWER, s.sdp))
                 flushIce(s.from, pc)
+                tuneSenders(pc)
             }
             "ice" -> {
                 val candidate = IceCandidate(s.mid, s.index ?: 0, s.candidate)
@@ -422,6 +567,10 @@ class CallManager(
         val config = PeerConnection.RTCConfiguration(iceServers()).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
             continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
+            bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
+            rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
+            tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.ENABLED
+            keyType = PeerConnection.KeyType.ECDSA
             iceCandidatePoolSize = 2
         }
         val pc = factory.createPeerConnection(config, object : PeerConnection.Observer {
@@ -440,24 +589,23 @@ class CallManager(
                 scope.launch {
                     when (newState) {
                         PeerConnection.PeerConnectionState.CONNECTED -> {
-                            upsertParticipant(userId) { it.copy(connected = true) }
+                            upsertParticipant(userId) { it.copy(connected = true, reconnecting = false) }
                             _state.update { it?.copy(phase = CallPhase.Active, connectedAt = it.connectedAt ?: System.currentTimeMillis()) }
+                            peerLock.withLock { iceRestarts.remove(userId) }
+                            peerLock.withLock { peers[userId] }?.let(::tuneSenders)
+                        }
+                        // Networks change (Wi-Fi to data, a lift, a tunnel). Don't wait the ~30 seconds it
+                        // takes to be declared failed: if it hasn't come back in a few seconds, find new routes.
+                        PeerConnection.PeerConnectionState.DISCONNECTED -> {
+                            upsertParticipant(userId) { if (it.connected) it.copy(reconnecting = true) else it }
+                            delay(3_000)
+                            if (peerLock.withLock { peers[userId] }?.connectionState() == PeerConnection.PeerConnectionState.DISCONNECTED) {
+                                recover(userId)
+                            }
                         }
                         PeerConnection.PeerConnectionState.FAILED -> {
-                            val me = myId()
-                            // Networks change (Wi-Fi to data, etc.): try once more with fresh routes before giving up.
-                            if (me != null && me < userId && restarted.add(userId)) {
-                                Log.w(TAG, "connection to $userId failed, restarting ICE")
-                                runCatching { offer(userId, iceRestart = true) }
-                            } else if (me != null && me > userId && restarted.add(userId)) {
-                                Log.w(TAG, "connection to $userId failed, waiting for their ICE restart")
-                                delay(8_000)
-                                if (peerLock.withLock { peers[userId] }?.connectionState() != PeerConnection.PeerConnectionState.CONNECTED) {
-                                    closePeer(userId, failed = true)
-                                }
-                            } else {
-                                closePeer(userId, failed = true)
-                            }
+                            upsertParticipant(userId) { if (it.connected) it.copy(reconnecting = true) else it }
+                            recover(userId)
                         }
                         else -> Unit
                     }
@@ -477,9 +625,27 @@ class CallManager(
             override fun onRenegotiationNeeded() = Unit
             override fun onAddTrack(receiver: RtpReceiver, streams: Array<out MediaStream>) = Unit
         }) ?: error("Couldn't set up the call")
-        audioTrack?.let { pc.addTrack(it, listOf("gng")) }
-        videoTrack?.let { pc.addTrack(it, listOf("gng")) }
         return pc
+    }
+
+    /** Tries to get a dropped connection back: the offering side restarts ICE (a few times), the other side waits for it. */
+    private suspend fun recover(userId: String) {
+        val me = myId() ?: return
+        val attempt = peerLock.withLock { (iceRestarts[userId] ?: 0).also { iceRestarts[userId] = it + 1 } }
+        when {
+            attempt >= MAX_ICE_RESTARTS -> closePeer(userId, failed = true)
+            me < userId -> {
+                Log.w(TAG, "connection to $userId lost, restarting ICE (attempt ${attempt + 1})")
+                runCatching { offer(userId, iceRestart = true) }
+            }
+            else -> {
+                Log.w(TAG, "connection to $userId lost, waiting for their ICE restart")
+                delay(12_000)
+                if (peerLock.withLock { peers[userId] }?.connectionState() != PeerConnection.PeerConnectionState.CONNECTED) {
+                    closePeer(userId, failed = true)
+                }
+            }
+        }
     }
 
     private suspend fun closePeer(userId: String, failed: Boolean = false) {
@@ -532,7 +698,7 @@ class CallManager(
                 peers.clear()
                 pendingIce.clear()
                 meeting.clear()
-                restarted.clear()
+                iceRestarts.clear()
             }
             releaseLocalTracks()
             stopAudio()
@@ -563,21 +729,30 @@ class CallManager(
     // --- media ----------------------------------------------------------------------------
 
     private fun createLocalTracks(video: Boolean) {
-        val audioSource = factory.createAudioSource(MediaConstraints())
+        val constraints = MediaConstraints().apply {
+            listOf("googEchoCancellation", "googAutoGainControl", "googNoiseSuppression", "googHighpassFilter")
+                .forEach { mandatory.add(MediaConstraints.KeyValuePair(it, "true")) }
+        }
+        val audioSource = factory.createAudioSource(constraints)
         audioTrack = factory.createAudioTrack("mic", audioSource).apply { setEnabled(true) }
-        if (!video) return
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return
+        if (video) createVideoTrack()
+    }
+
+    /** The front camera as a track, or null without the camera permission. */
+    private fun createVideoTrack(): VideoTrack? {
+        videoTrack?.let { return it }
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return null
         val enumerator = Camera2Enumerator(context)
-        val name = enumerator.deviceNames.firstOrNull { enumerator.isFrontFacing(it) } ?: enumerator.deviceNames.firstOrNull() ?: return
-        val cam = enumerator.createCapturer(name, null) ?: return
+        val name = enumerator.deviceNames.firstOrNull { enumerator.isFrontFacing(it) } ?: enumerator.deviceNames.firstOrNull() ?: return null
+        val cam = enumerator.createCapturer(name, null) ?: return null
         val helper = SurfaceTextureHelper.create("camera", eglBase.eglBaseContext)
         val source = factory.createVideoSource(false)
         cam.initialize(helper, context, source.capturerObserver)
-        cam.startCapture(1280, 720, 30)
+        cam.startCapture(CAPTURE_W, CAPTURE_H, CAPTURE_FPS)
         capturer = cam
         textureHelper = helper
         videoSource = source
-        videoTrack = factory.createVideoTrack("cam", source).apply { setEnabled(true) }
+        return factory.createVideoTrack("cam", source).apply { setEnabled(true) }.also { videoTrack = it }
     }
 
     private fun releaseLocalTracks() {
@@ -599,27 +774,30 @@ class CallManager(
         setSpeaker(speaker)
     }
 
+    /** Speaker on, or off: then a Bluetooth or wired headset if one is connected, else the earpiece. */
     @Suppress("DEPRECATION")
     private fun setSpeaker(on: Boolean) {
         if (Build.VERSION.SDK_INT >= 31) {
-            if (on) {
-                audio.availableCommunicationDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
-                    ?.let { audio.setCommunicationDevice(it) }
+            val devices = audio.availableCommunicationDevices
+            val target = if (on) {
+                devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
             } else {
-                audio.clearCommunicationDevice()
+                devices.firstOrNull { it.type in HEADSETS } ?: devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
             }
+            if (target != null) audio.setCommunicationDevice(target) else audio.clearCommunicationDevice()
         } else {
             audio.isSpeakerphoneOn = on
         }
     }
 
+    @Suppress("DEPRECATION")
     private fun stopAudio() {
-        setSpeaker(false)
+        if (Build.VERSION.SDK_INT >= 31) audio.clearCommunicationDevice() else audio.isSpeakerphoneOn = false
         audio.mode = AudioManager.MODE_NORMAL
     }
 
     private fun iceServers(): List<PeerConnection.IceServer> = buildList {
-        add(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer())
+        add(PeerConnection.IceServer.builder(listOf("stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302")).createIceServer())
         val turn = BuildConfig.TURN_URLS.split(',').map { it.trim() }.filter { it.isNotEmpty() }
         if (turn.isNotEmpty()) {
             add(
@@ -631,6 +809,16 @@ class CallManager(
         }
     }
 }
+
+private const val STREAM = "gng"
+private const val CAPTURE_W = 1280
+private const val CAPTURE_H = 720
+private const val CAPTURE_FPS = 30
+private const val MAX_ICE_RESTARTS = 3
+private val HEADSETS = setOf(
+    AudioDeviceInfo.TYPE_BLUETOOTH_SCO, AudioDeviceInfo.TYPE_BLE_HEADSET, AudioDeviceInfo.TYPE_WIRED_HEADSET,
+    AudioDeviceInfo.TYPE_WIRED_HEADPHONES, AudioDeviceInfo.TYPE_USB_HEADSET,
+)
 
 // --- SDP callbacks as suspend functions ---------------------------------------------------
 

@@ -35,7 +35,7 @@ class AppContainer(context: Context) {
     val profiles by lazy { ProfileRepository(client) }
     val groups by lazy { GroupRepository(client) }
     val cache by lazy { ChatCache(context) }
-    val e2ee by lazy { E2ee(context, client) }
+    val e2ee by lazy { E2ee(context, client, cache) }
     val chat by lazy { ChatRepository(client, cache, e2ee) }
     val media by lazy { MediaRepository(context, client, cache) }
     val stickers by lazy { StickerStore(context, media) }

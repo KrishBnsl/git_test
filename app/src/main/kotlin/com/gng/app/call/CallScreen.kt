@@ -5,6 +5,8 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,6 +34,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -85,8 +88,32 @@ fun CallScreen(calls: CallManager, onClose: () -> Unit) {
         val missing = needed.filter { ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED }
         if (missing.isEmpty()) scope.launch { calls.accept() } else askPermissions.launch(missing.toTypedArray())
     }
+    fun hasCamera() = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+    val askCamera = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) scope.launch { calls.enableCamera() }
+    }
+    fun toggleCamera() = if (s.camOn || hasCamera()) calls.toggleCamera() else askCamera.launch(Manifest.permission.CAMERA)
+    // Answered a video call from the notification without the camera permission: ask now, and
+    // the camera joins the call as soon as it's allowed.
+    var askedCamera by remember { mutableStateOf(false) }
+    LaunchedEffect(s.phase, s.video) {
+        val inCall = s.phase == CallPhase.Connecting || s.phase == CallPhase.Calling || s.phase == CallPhase.Active
+        if (inCall && s.video && s.localVideo == null && !askedCamera && !hasCamera()) {
+            askedCamera = true
+            askCamera.launch(Manifest.permission.CAMERA)
+        }
+    }
+    // In a video call, tap anywhere to hide the controls and see more of the picture.
+    var controlsShown by remember { mutableStateOf(true) }
+    val anyVideo = s.participants.any { it.video != null && it.camOn }
 
-    Box(Modifier.fillMaxSize().background(Color(0xFF0F0D14))) {
+    Box(
+        Modifier.fillMaxSize().background(Color(0xFF0F0D14))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() }, indication = null,
+                enabled = anyVideo && s.phase == CallPhase.Active,
+            ) { controlsShown = !controlsShown },
+    ) {
         val remoteWithVideo = s.participants.filter { it.video != null && it.camOn }
         when {
             s.phase == CallPhase.Ringing || s.participants.isEmpty() -> Unit
@@ -104,8 +131,9 @@ fun CallScreen(calls: CallManager, onClose: () -> Unit) {
             }
         }
 
+        val showChrome = controlsShown || !anyVideo || s.phase != CallPhase.Active
         // Header: who and how long.
-        Column(
+        if (showChrome) Column(
             Modifier.align(Alignment.TopCenter).safeDrawingPadding().padding(top = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -131,25 +159,33 @@ fun CallScreen(calls: CallManager, onClose: () -> Unit) {
         }
 
         // Controls.
-        Row(
-            Modifier.align(Alignment.BottomCenter).safeDrawingPadding().padding(bottom = 32.dp),
-            horizontalArrangement = Arrangement.spacedBy(20.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            when (s.phase) {
-                CallPhase.Ringing -> {
-                    RoundButton(GngIcons.CallEnd, RED, Color.White, "Decline") { scope.launch { calls.decline(s.callId) } }
-                    RoundButton(if (s.video) GngIcons.Videocam else GngIcons.Call, GREEN, Color.White, "Accept") { accept() }
-                }
-                CallPhase.Ended -> Text(s.endedReason ?: "Call ended", color = Color.White)
-                else -> {
-                    Toggle(if (s.micOn) GngIcons.Mic else GngIcons.MicOff, !s.micOn, if (s.micOn) "Mute" else "Unmute") { calls.toggleMic() }
-                    if (s.video) {
-                        Toggle(if (s.camOn) GngIcons.Videocam else GngIcons.VideocamOff, !s.camOn, "Camera") { calls.toggleCamera() }
-                        Toggle(GngIcons.Cameraswitch, false, "Flip") { calls.flipCamera() }
-                    }
+        when (s.phase) {
+            CallPhase.Ringing -> Row(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().safeDrawingPadding().padding(bottom = 48.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+            ) {
+                RoundButton(GngIcons.CallEnd, RED, Color.White, "Decline", size = 72.dp) { scope.launch { calls.decline(s.callId) } }
+                RoundButton(if (s.video) GngIcons.Videocam else GngIcons.Call, GREEN, Color.White, "Accept", size = 72.dp) { accept() }
+            }
+            CallPhase.Ended -> Text(
+                s.endedReason ?: "Call ended", color = Color.White,
+                modifier = Modifier.align(Alignment.BottomCenter).safeDrawingPadding().padding(bottom = 48.dp),
+            )
+            else -> if (showChrome) Surface(
+                color = Color.Black.copy(alpha = 0.45f),
+                shape = RoundedCornerShape(32.dp),
+                modifier = Modifier.align(Alignment.BottomCenter).safeDrawingPadding().padding(horizontal = 12.dp, vertical = 20.dp),
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Toggle(GngIcons.VolumeUp, s.speakerOn, "Speaker") { calls.toggleSpeaker() }
-                    RoundButton(GngIcons.CallEnd, RED, Color.White, "Hang up") { scope.launch { calls.hangUp() } }
+                    Toggle(if (s.camOn) GngIcons.Videocam else GngIcons.VideocamOff, s.camOn, "Camera") { toggleCamera() }
+                    if (s.camOn) Toggle(GngIcons.Cameraswitch, false, "Flip") { calls.flipCamera() }
+                    Toggle(if (s.micOn) GngIcons.Mic else GngIcons.MicOff, !s.micOn, if (s.micOn) "Mute" else "Muted") { calls.toggleMic() }
+                    RoundButton(GngIcons.CallEnd, RED, Color.White, "End") { scope.launch { calls.hangUp() } }
                 }
             }
         }
@@ -171,6 +207,7 @@ private fun statusLine(s: CallUi): String {
         CallPhase.Connecting -> "Connecting…"
         CallPhase.Ended -> s.endedReason ?: "Call ended"
         CallPhase.Active -> {
+            if (s.participants.isNotEmpty() && s.participants.all { it.reconnecting }) return "Reconnecting…"
             val secs = ((now - (s.connectedAt ?: now)) / 1000).coerceAtLeast(0)
             val people = if (s.participants.size > 1) " · ${s.participants.size + 1} people" else ""
             "%d:%02d".format(secs / 60, secs % 60) + people
@@ -188,7 +225,7 @@ private fun ParticipantTile(p: Participant, profile: Profile?, egl: EglBase) {
             } else {
                 Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
                     Avatar(profile?.displayName ?: "?", profile?.avatarUrl, size = 72.dp, colorKey = p.userId)
-                    if (!p.connected) Text("connecting…", color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+                    if (!p.connected || p.reconnecting) Text(if (p.reconnecting) "reconnecting…" else "connecting…", color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
                 }
             }
             Row(
@@ -237,14 +274,14 @@ private fun Toggle(icon: Int, active: Boolean, label: String, onClick: () -> Uni
     )
 
 @Composable
-private fun RoundButton(icon: Int, container: Color, content: Color, label: String, size: Dp = 64.dp, onClick: () -> Unit) {
+private fun RoundButton(icon: Int, container: Color, content: Color, label: String, size: Dp = 56.dp, onClick: () -> Unit) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         FilledIconButton(
             onClick = onClick,
             modifier = Modifier.size(size),
             shape = CircleShape,
             colors = IconButtonDefaults.filledIconButtonColors(containerColor = container, contentColor = content),
-        ) { GngIcon(icon, label, size = 28.dp, tint = content) }
+        ) { GngIcon(icon, label, size = if (size > 60.dp) 32.dp else 26.dp, tint = content) }
         Text(label, color = Color.White.copy(alpha = 0.8f), fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
     }
 }

@@ -1,6 +1,7 @@
 package com.gng.app.crypto
 
 import android.content.Context
+import com.gng.app.data.ChatCache
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
@@ -43,6 +44,16 @@ private data class EpochRow(
 @Serializable
 private data class MemberId(@SerialName("user_id") val userId: String)
 
+/** An epoch some current member can't open yet, and their key to wrap it for. */
+@Serializable
+private data class NeededShare(
+    @SerialName("group_id") val groupId: String,
+    val epoch: Int,
+    @SerialName("recipient_id") val recipientId: String,
+    @SerialName("recipient_key_id") val recipientKeyId: String,
+    @SerialName("public_key") val publicKey: String,
+)
+
 /** A conversation key that's ready to encrypt with. */
 class EpochKey(val epoch: Int, val key: ByteArray)
 
@@ -52,14 +63,21 @@ class EpochKey(val epoch: Int, val key: ByteArray)
  * Each conversation has numbered key epochs. An epoch is a random AES-256 key wrapped with HPKE
  * for every member's device key. Before sending, a client checks that the latest epoch was wrapped
  * for exactly the current members' current keys; if not (someone joined, left, or reinstalled) it
- * publishes a new epoch. So people who leave can't read what comes after, and newcomers can't read
- * what came before.
+ * publishes a new epoch, so people who leave can't read what comes after.
+ *
+ * History is shared the other way: when someone joins, or reinstalls (a new device key), any
+ * member's phone that can open the older epochs wraps them for that person too ([shareHistory]),
+ * so they see the chat's earlier messages instead of "can't decrypt".
+ *
+ * Opened epoch keys are kept in [ChatCache] (app-private, like the decrypted messages), so a
+ * notification can be decrypted without a network round trip.
  */
-class E2ee(context: Context, private val client: SupabaseClient) {
+class E2ee(context: Context, private val client: SupabaseClient, private val cache: ChatCache) {
     private val identity by lazy { IdentityKeys(context) }
     private val keys = ConcurrentHashMap<String, ByteArray>()
     private val sendKeys = ConcurrentHashMap<String, Pair<Long, EpochKey>>()
     private val locks = ConcurrentHashMap<String, Mutex>()
+    private val sharing = Mutex()
 
     val myPublicKey: String get() = identity.publicKey
     val myKeyId: String get() = identity.keyId
@@ -80,6 +98,9 @@ class E2ee(context: Context, private val client: SupabaseClient) {
     /** The key for [epoch] in [groupId], or null if it wasn't wrapped for this device. */
     suspend fun keyFor(groupId: String, epoch: Int, myId: String): ByteArray? {
         keys["$groupId:$epoch"]?.let { return it }
+        cache.getRaw(diskKey(groupId, epoch))?.let { saved ->
+            return runCatching { saved.unb64() }.getOrNull()?.also { keys["$groupId:$epoch"] = it }
+        }
         return withContext(Dispatchers.IO) {
             val row = client.from("conversation_keys").select {
                 filter {
@@ -90,7 +111,46 @@ class E2ee(context: Context, private val client: SupabaseClient) {
             }.decodeSingleOrNull<EpochRow>() ?: return@withContext null
             if (row.recipientKeyId != identity.keyId || row.wrappedKey == null) return@withContext null
             runCatching { identity.unwrap(row.wrappedKey, wrapContext(groupId, epoch, myId)) }.getOrNull()
-                ?.also { keys["$groupId:$epoch"] = it }
+                ?.also { remember(groupId, epoch, it) }
+        }
+    }
+
+    private suspend fun remember(groupId: String, epoch: Int, key: ByteArray) {
+        keys["$groupId:$epoch"] = key
+        cache.putRaw(diskKey(groupId, epoch), key.b64())
+    }
+
+    private fun diskKey(groupId: String, epoch: Int) = "epoch:$groupId:$epoch"
+
+    /**
+     * Wraps every epoch this phone can open for the members who can't (new to the chat, or on a
+     * new phone). Returns the conversations where something was shared. Cheap when there's nothing to do.
+     */
+    suspend fun shareHistory(myId: String): Set<String> = sharing.withLock {
+        withContext(Dispatchers.IO) {
+            val needed = client.postgrest.rpc("key_shares_needed").decodeList<NeededShare>()
+            val shared = mutableSetOf<String>()
+            needed.groupBy { it.groupId }.forEach { (groupId, rows) ->
+                val wraps = buildJsonArray {
+                    rows.forEach { r ->
+                        val secret = keyFor(groupId, r.epoch, myId) ?: return@forEach
+                        add(buildJsonObject {
+                            put("epoch", r.epoch)
+                            put("recipient_id", r.recipientId)
+                            put("recipient_key_id", r.recipientKeyId)
+                            put("wrapped_key", IdentityKeys.wrap(r.publicKey, secret, wrapContext(groupId, r.epoch, r.recipientId)))
+                        })
+                    }
+                }
+                if (wraps.isEmpty()) return@forEach
+                runCatching {
+                    client.postgrest.rpc("share_epoch_keys", buildJsonObject {
+                        put("gid", groupId)
+                        put("p_wraps", wraps)
+                    })
+                }.onSuccess { shared += groupId }
+            }
+            shared
         }
     }
 
@@ -160,7 +220,7 @@ class E2ee(context: Context, private val client: SupabaseClient) {
                 put("p_wraps", wraps)
             }).decodeAs<Boolean>()
             if (published) {
-                keys["$groupId:$next"] = secret
+                remember(groupId, next, secret)
                 return EpochKey(next, secret)
             }
             // Someone else published this epoch a moment ago; loop and use theirs if it fits.

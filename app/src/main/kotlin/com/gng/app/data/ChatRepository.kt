@@ -80,11 +80,14 @@ class ChatRepository(
         }
     }
 
-    /** One message by id, e.g. when a push notification arrives. */
+    /**
+     * One message by id, e.g. when a push notification arrives. Not cached: the cache must stay a
+     * gap-free tail of the chat, since [syncNewer] only asks the server for what's after it.
+     */
     suspend fun fetchOne(id: Long, myId: String): ChatMessage? = withContext(Dispatchers.IO) {
         cache.get(id)?.takeIf { it.payload.t != "locked" }?.let { return@withContext it }
         client.from("messages").select { filter { eq("id", id) } }.decodeSingleOrNull<MessageRow>()
-            ?.let { decrypt(it, myId) }?.also { cache.put(listOf(it)) }
+            ?.let { decrypt(it, myId) }
     }
 
     /** Tries again on messages we couldn't open, after a new key epoch shows up. */
@@ -153,7 +156,7 @@ class ChatRepository(
             val plaintext = json.encodeToString(Payload.serializer(), draft.payload).toByteArray()
             val ciphertext = Aead.seal(key.key, plaintext, messageAad(draft.groupId, key.epoch, myId, clientId)).b64()
             val row = client.from("messages")
-                .insert(NewEncryptedMessage(draft.groupId, key.epoch, ciphertext, clientId)) { select() }
+                .insert(NewEncryptedMessage(draft.groupId, key.epoch, ciphertext, clientId, draft.payload.mentions?.takeIf { it.isNotEmpty() })) { select() }
                 .decodeSingle<MessageRow>()
             draft.copy(id = row.id, createdAt = parseInstant(row.createdAt), state = SendState.Sent)
                 .also { cache.put(listOf(it)) }
@@ -183,18 +186,23 @@ class ChatRepository(
     /** Decrypts and caches a reaction row; returns the emoji (null = removed). */
     suspend fun applyReaction(row: ReactionRow, myId: String): String? {
         val userId = row.userId ?: return null
-        val emoji = if (row.ciphertext == null || row.epoch == null) {
-            null
-        } else {
-            e2ee.keyFor(row.groupId, row.epoch, myId)?.let { key ->
-                runCatching {
-                    Aead.open(key, row.ciphertext.unb64(), reactionAad(row.groupId, row.messageId, userId)).decodeToString()
-                }.getOrNull()
-            }
-        }
+        val emoji = openReaction(row, myId)
         cache.putReaction(row.groupId, row.messageId, userId, emoji)
         return emoji
     }
+
+    /** Just the emoji, or null if it was removed or can't be opened. */
+    suspend fun openReaction(row: ReactionRow, myId: String): String? {
+        val userId = row.userId ?: return null
+        if (row.ciphertext == null || row.epoch == null) return null
+        val key = e2ee.keyFor(row.groupId, row.epoch, myId) ?: return null
+        return runCatching {
+            Aead.open(key, row.ciphertext.unb64(), reactionAad(row.groupId, row.messageId, userId)).decodeToString()
+        }.getOrNull()
+    }
+
+    /** A message we already have locally (e.g. to quote it in a reaction notification). */
+    suspend fun cachedMessage(id: Long): ChatMessage? = cache.get(id)
 
     suspend fun react(groupId: String, messageId: Long, myId: String, emoji: String?) = withContext(Dispatchers.IO) {
         val row = if (emoji == null) {
@@ -251,7 +259,8 @@ class ChatRepository(
             table = "read_states"
             filter("group_id", FilterOperator.EQ, groupId)
         }
-        val keys = channel.postgresChangeFlow<PostgresAction.Insert>(schema = "public") {
+        // New epochs, and old ones re-wrapped for us (we joined late or are on a new phone).
+        val keys = channel.postgresChangeFlow<PostgresAction>(schema = "public") {
             table = "conversation_keys"
             filter("group_id", FilterOperator.EQ, groupId)
         }
@@ -308,8 +317,21 @@ class ChatRepository(
     suspend fun call(id: String): CallRow? =
         client.from("calls").select { filter { eq("id", id) } }.decodeSingleOrNull()
 
+    /** Opens a DM with anyone on gng: straight away with gang-mates, as a message request otherwise. */
     suspend fun openDm(otherUserId: String): Group =
-        client.postgrest.rpc("open_direct_chat", buildJsonObject { put("p_other", otherUserId) }).decodeAs()
+        client.postgrest.rpc("request_direct_chat", buildJsonObject { put("p_other", otherUserId) }).decodeAs()
+
+    /** Accept (it becomes a normal DM) or decline (it's deleted) a message request someone sent me. */
+    suspend fun respondToRequest(groupId: String, accept: Boolean) {
+        client.postgrest.rpc("respond_dm_request", buildJsonObject {
+            put("gid", groupId)
+            put("p_accept", accept)
+        })
+    }
+
+    /** Anyone on gng, by @username or name. */
+    suspend fun searchPeople(query: String): List<PersonCard> =
+        client.postgrest.rpc("search_people", buildJsonObject { put("q", query) }).decodeList()
 
     /** Everyone I share a gang with (RLS only returns those), for starting a DM. */
     suspend fun people(myId: String): List<Profile> =

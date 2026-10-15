@@ -74,9 +74,22 @@ class ProfileRepository(private val client: SupabaseClient) {
             put("year", profile.year)
             put("birthday", profile.birthday)
             put("status_text", profile.statusText)
+            put("college", profile.college)
+            // Left out when unset, so the server keeps (or makes up) one.
+            profile.username?.let { put("username", it.lowercase()) }
         }
-        client.from("profiles").upsert(row)
+        try {
+            client.from("profiles").upsert(row)
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            if (e.message?.contains("profiles_username") == true) error("That username is taken")
+            throw e
+        }
     }
+
+    /** Whether nobody else has [username] (and it's a valid one). */
+    suspend fun usernameAvailable(username: String): Boolean =
+        client.postgrest.rpc("username_available", buildJsonObject { put("p_username", username) }).decodeAs()
 
     suspend fun getMany(ids: List<String>): List<Profile> =
         if (ids.isEmpty()) emptyList()
@@ -112,10 +125,9 @@ class GroupRepository(private val client: SupabaseClient) {
     suspend fun join(code: String): Group =
         client.postgrest.rpc("join_group", buildJsonObject { put("p_code", code) }).decodeAs()
 
+    /** With full profiles, except the other side of a message request, who's just a public card. */
     suspend fun members(groupId: String): List<Member> =
-        client.from("group_members")
-            .select(Columns.raw("user_id, role, profiles(*)")) { filter { eq("group_id", groupId) } }
-            .decodeList()
+        client.postgrest.rpc("group_member_profiles", buildJsonObject { put("gid", groupId) }).decodeList()
 
     /** Photo, name and icon. Allowed for admins, or for every member when the gang's edit permission is open. */
     suspend fun updateInfo(

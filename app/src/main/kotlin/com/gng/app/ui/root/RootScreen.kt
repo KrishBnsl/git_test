@@ -80,7 +80,11 @@ class RootViewModel(private val c: AppContainer) : ViewModel() {
     private fun startSession(uid: String) {
         session?.cancel()
         session = viewModelScope.launch {
-            launch { runCatching { c.e2ee.publishIdentity(uid) } }
+            launch {
+                runCatching { c.e2ee.publishIdentity(uid) }
+                // Let anyone who joined our chats (or got a new phone) read the history.
+                runCatching { c.e2ee.shareHistory(uid) }
+            }
             launch { c.settings.push.collectLatest { c.push.sync(it) } }
             launch {
                 while (true) {

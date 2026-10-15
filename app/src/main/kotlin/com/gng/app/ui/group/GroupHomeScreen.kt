@@ -235,7 +235,7 @@ fun GroupHomeScreen(
     ) { current ->
         if (ctx != null) {
             when (if (ctx.isDm) GroupTab.Chat else current) {
-                GroupTab.Chat -> ChatScreen(ctx, onOpenEvent = { m -> tab = tabForEvent(m.kind).ordinal })
+                GroupTab.Chat -> ChatScreen(ctx, onOpenEvent = { m -> tab = tabForEvent(m.kind).ordinal }, onClosed = onBack)
                 GroupTab.Plans -> PlansTab(ctx)
                 GroupTab.Map -> MapTab(ctx, onOpenSquad = { tab = GroupTab.Squad.ordinal }, onMessage = onMessage)
                 GroupTab.Squad -> SquadTab(ctx, onTimetable, onMessage)
