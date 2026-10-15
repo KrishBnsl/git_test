@@ -20,6 +20,16 @@ data class MessageRow(
     @SerialName("created_at") val createdAt: String,
     /** Who was @mentioned (user ids). Plain, so the server can notify them; the text itself is encrypted. */
     val mentions: List<String>? = null,
+    @SerialName("edited_at") val editedAt: String? = null,
+    @SerialName("deleted_at") val deletedAt: String? = null,
+)
+
+/** When each person got and saw one message (null: not yet). */
+@Serializable
+data class MessageReceipt(
+    @SerialName("user_id") val userId: String,
+    @SerialName("delivered_at") val deliveredAt: String? = null,
+    @SerialName("read_at") val readAt: String? = null,
 )
 
 @Serializable
@@ -120,7 +130,10 @@ data class Payload(
     val media: MediaRef? = null,
     /** User ids @mentioned in [text]; each appears in the text as "@" + their display name. */
     val mentions: List<String>? = null,
+    /** Set on this phone (never sent): the sender changed it after sending. */
+    val edited: Boolean? = null,
 ) {
+    val isDeleted get() = t == "deleted"
     fun mentions(userId: String) = mentions?.contains(userId) == true
 
     /** One line for previews, notifications and reply quotes. */
@@ -129,6 +142,7 @@ data class Payload(
         "file" -> "📎 ${media?.name ?: "File"}"
         "sticker" -> "Sticker"
         "locked" -> "🔒 Message (waiting to unlock)"
+        "deleted" -> "This message was deleted"
         else -> text.orEmpty()
     }
 }

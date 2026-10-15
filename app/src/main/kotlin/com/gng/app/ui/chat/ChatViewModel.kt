@@ -44,6 +44,11 @@ class ChatViewModel(private val c: AppContainer, private val ctx: GroupContext) 
     var receipts by mutableStateOf<Map<String, ReadState>>(emptyMap())
         private set
     var replyTo by mutableStateOf<ChatMessage?>(null)
+    /** The message being edited: its text is in the composer and Send saves the change. */
+    var editing by mutableStateOf<ChatMessage?>(null)
+        private set
+    /** Deleted "for me" on this phone. */
+    private var hidden: Set<Long> = emptySet()
     var error by mutableStateOf<String?>(null)
     fun dismissError() { error = null }
     var loaded by mutableStateOf(false)
@@ -63,12 +68,15 @@ class ChatViewModel(private val c: AppContainer, private val ctx: GroupContext) 
     init {
         viewModelScope.launch {
             // 1. Whatever we have on the phone, immediately.
+            hidden = c.chat.hiddenIds(groupId)
             messages = sorted(c.chat.cached(groupId))
             reactions = c.chat.cachedReactions(groupId)
             if (messages.isNotEmpty()) loaded = true
             // 2. Catch up with the server.
             runCatching {
                 merge(c.chat.syncNewer(groupId, myId))
+                // Edits and deletions that happened while we weren't looking.
+                merge(c.chat.syncChanges(groupId, myId))
                 receipts = c.chat.readStates(groupId).associateBy { it.userId }
                 val oldest = messages.firstOrNull { it.id > 0 }?.id ?: 0
                 reactions = c.chat.syncReactions(groupId, oldest, myId)
@@ -97,8 +105,16 @@ class ChatViewModel(private val c: AppContainer, private val ctx: GroupContext) 
                 c.chat.live(groupId).collect { event ->
                     when (event) {
                         is LiveEvent.NewMessage -> {
-                            merge(listOf(c.chat.decrypt(event.row, myId)))
+                            val m = c.chat.decrypt(event.row, myId)
+                            merge(listOf(m))
+                            // Into the cache too, so it's still there next time the chat opens.
+                            c.chat.remember(m)
                             markSeen()
+                        }
+                        is LiveEvent.MessageChanged -> {
+                            val m = c.chat.decrypt(event.row, myId)
+                            merge(listOf(m))
+                            c.chat.remember(m)
                         }
                         is LiveEvent.ReactionChanged -> {
                             val row = event.row
@@ -179,7 +195,7 @@ class ChatViewModel(private val c: AppContainer, private val ctx: GroupContext) 
     }
 
     private fun sorted(list: List<ChatMessage>) =
-        list.distinctBy { it.id }.sortedWith(compareBy<ChatMessage>({ if (it.isPending) 1 else 0 }, { if (it.isPending) it.createdAt.toEpochMilli() else it.id }))
+        list.filter { it.id !in hidden }.distinctBy { it.id }.sortedWith(compareBy<ChatMessage>({ if (it.isPending) 1 else 0 }, { if (it.isPending) it.createdAt.toEpochMilli() else it.id }))
 
     // --- sending ----------------------------------------------------------------------
 
@@ -187,7 +203,64 @@ class ChatViewModel(private val c: AppContainer, private val ctx: GroupContext) 
     fun sendText(text: String, tagged: Collection<String> = emptyList()) {
         val body = text.trim().takeIf { it.isNotEmpty() } ?: return
         val mentions = tagged.distinct().filter { id -> id != myId && ctx.members[id]?.let { "@${it.displayName}" in body } == true }
-        send(withReply(Payload("text", text = body, mentions = mentions.takeIf { it.isNotEmpty() })))
+        // Keep tags that were already in an edited message and are still named in it.
+        val kept = editing?.payload?.mentions.orEmpty().filter { id -> ctx.members[id]?.let { "@${it.displayName}" in body } == true }
+        val all = (mentions + kept).distinct().takeIf { it.isNotEmpty() }
+        editing?.let { target ->
+            editing = null
+            if (body == target.payload.text) return
+            val optimistic = target.copy(payload = target.payload.copy(text = body, mentions = all, edited = true))
+            messages = messages.map { if (it.id == target.id) optimistic else it }
+            viewModelScope.launch {
+                runCatching { c.chat.edit(target, body, all, myId) }
+                    .onSuccess { merge(listOf(it)) }
+                    .onFailure {
+                        messages = messages.map { m -> if (m.id == target.id) target else m }
+                        error = it.friendly()
+                    }
+            }
+            return
+        }
+        send(withReply(Payload("text", text = body, mentions = all)))
+    }
+
+    // --- edit & delete ----------------------------------------------------------------
+
+    /** Your own text messages, for 15 minutes (the server enforces this too). */
+    fun canEdit(m: ChatMessage) = m.userId == myId && !m.isPending && m.payload.t == "text" &&
+        m.createdAt.isAfter(Instant.now().minusSeconds(EDIT_WINDOW_S - 15))
+
+    /** Your own messages, for 2 days. */
+    fun canDeleteForEveryone(m: ChatMessage) = m.userId == myId && !m.isPending && !m.payload.isDeleted &&
+        m.isUserMessage && m.createdAt.isAfter(Instant.now().minusSeconds(DELETE_WINDOW_S - 60))
+
+    fun startEdit(m: ChatMessage) {
+        if (!canEdit(m)) return
+        replyTo = null
+        editing = m
+    }
+
+    fun cancelEdit() {
+        editing = null
+    }
+
+    fun deleteForEveryone(m: ChatMessage) = viewModelScope.launch {
+        runCatching { c.chat.deleteForEveryone(m) }
+            .onSuccess {
+                merge(listOf(it))
+                reactions = reactions - m.id
+            }
+            .onFailure { error = it.friendly() }
+    }
+
+    fun deleteForMe(m: ChatMessage) = viewModelScope.launch {
+        if (m.isPending) {
+            discard(m)
+            return@launch
+        }
+        c.chat.deleteForMe(m)
+        hidden = hidden + m.id
+        messages = messages.filterNot { it.id == m.id }
     }
 
     // Uploads take a while, so each of these takes the reply target when you hit send, not when the upload finishes.
@@ -315,14 +388,26 @@ class ChatViewModel(private val c: AppContainer, private val ctx: GroupContext) 
             val readers = states.filter { it.readId >= m.id }
             val delivered = states.any { it.deliveredId >= m.id }
             when {
-                ctx.isDm && readers.isNotEmpty() -> Receipt("Read " + (readers.first().readAt?.let(::shortTime) ?: ""))
-                readers.isNotEmpty() && readers.size >= others.size -> Receipt("Read by everyone")
+                ctx.isDm && readers.isNotEmpty() -> Receipt("Seen " + (readers.first().readAt?.let(::shortTime) ?: "").lowercase())
+                readers.isNotEmpty() && readers.size >= others.size -> Receipt("Seen by everyone")
                 readers.isNotEmpty() -> {
-                    val names = readers.map { ctx.nameOf(it.userId) }
-                    Receipt("Read by " + names.take(2).joinToString(", ") + if (names.size > 2) " +${names.size - 2}" else "")
+                    val names = readers.map { ctx.nameOf(it.userId).substringBefore(' ') }
+                    Receipt("Seen by " + names.take(2).joinToString(", ") + if (names.size > 2) " +${names.size - 2}" else "")
                 }
                 delivered -> Receipt("Delivered")
                 else -> Receipt("Sent")
+            }
+        }
+    }
+
+    /** Per person, exactly when they got and saw [m] (from the server's receipt log). */
+    suspend fun exactReceipts(m: ChatMessage): List<Pair<String, String>> {
+        val times = runCatching { c.chat.receipts(groupId, m.id) }.getOrNull() ?: return detailsFor(m)
+        return times.sortedBy { it.readAt == null }.map { r ->
+            r.userId to when {
+                r.readAt != null -> "Seen ${longTime(r.readAt)}"
+                r.deliveredAt != null -> "Delivered ${longTime(r.deliveredAt)}"
+                else -> "Not delivered yet"
             }
         }
     }
@@ -332,7 +417,7 @@ class ChatViewModel(private val c: AppContainer, private val ctx: GroupContext) 
         val s = receipts[uid]
         uid to when {
             s == null -> "Not delivered yet"
-            s.readId >= m.id -> "Read" + (if (s.readId == latestMineId()) s.readAt?.let { " " + shortTime(it) } ?: "" else "")
+            s.readId >= m.id -> "Seen" + (if (s.readId == latestMineId()) s.readAt?.let { " " + shortTime(it) } ?: "" else "")
             s.deliveredId >= m.id -> "Delivered"
             else -> "Not delivered yet"
         }
@@ -381,6 +466,21 @@ class ChatViewModel(private val c: AppContainer, private val ctx: GroupContext) 
     companion object {
         private val TIME = DateTimeFormatter.ofPattern("h:mm a")
         private val DAY = DateTimeFormatter.ofPattern("EEE")
+
+        private val DAY_TIME = DateTimeFormatter.ofPattern("d MMM, h:mm a")
+        const val EDIT_WINDOW_S = 15 * 60L
+        const val DELETE_WINDOW_S = 2 * 24 * 3600L
+
+        /** "10:42 pm" today, "Yesterday, 10:42 pm", otherwise "3 Oct, 10:42 pm". */
+        fun longTime(iso: String): String {
+            val t = parseInstant(iso).atZone(ZoneId.systemDefault())
+            val today = Instant.now().atZone(ZoneId.systemDefault()).toLocalDate()
+            return when (t.toLocalDate()) {
+                today -> t.format(TIME)
+                today.minusDays(1) -> "yesterday, " + t.format(TIME)
+                else -> t.format(DAY_TIME)
+            }.lowercase()
+        }
 
         fun shortTime(iso: String): String {
             val t = parseInstant(iso).atZone(ZoneId.systemDefault())

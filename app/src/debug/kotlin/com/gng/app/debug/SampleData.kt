@@ -76,13 +76,16 @@ object SampleData {
             it.copy(payload = it.payload.copy(replyTo = 5, replyUser = chirag.id, replyText = "mic mac at 1?"))
         },
         msg(10, diya.id, "also it's my birthday so someone is paying", minutesAgo = 39),
-        msg(11, me.id, "happy birthday!! chai on me", minutesAgo = 12),
-        msg(12, esha.id, "wait it's today?? HBD", minutesAgo = 4),
+        msg(11, aarav.id, "", minutesAgo = 30).let { it.copy(payload = com.gng.app.data.Payload("deleted")) },
+        msg(12, me.id, "happy birthday!! chai on me, and the samosas too", minutesAgo = 12).let {
+            it.copy(payload = it.payload.copy(replyTo = 10, replyUser = diya.id, replyText = "also it's my birthday so someone is paying", edited = true))
+        },
+        msg(13, esha.id, "wait it's today?? HBD", minutesAgo = 4),
     )
     /** messageId -> (userId -> tapback) */
     val reactions: Map<Long, Map<String, String>> = mapOf(
         10L to mapOf(aarav.id to "😂", bhavya.id to "😂", me.id to "🔥"),
-        11L to mapOf(diya.id to "❤️"),
+        12L to mapOf(diya.id to "❤️"),
     )
 
     private fun at(hour: Int, minute: Int = 0): String =
