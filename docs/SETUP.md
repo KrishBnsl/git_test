@@ -13,6 +13,8 @@ About 15 minutes, all free.
    Then run `supabase/migrations/0004_direct_messages.sql` (the first, plain-text direct messages).
    Then run `supabase/migrations/0005_chat.sql` (end-to-end encryption, encrypted DMs, read receipts, media, push, calls),
    and `0006_push_triggers.sql` (sends new messages and calls to the push function; see §3).
+   Then `0007_mentions.sql` (@mentions) and `0008_history_and_push.sql` (lets new members and new phones read a
+   chat's history; reaction notifications, unread counts in notifications).
    All six can be run again safely if you're unsure whether you did; run them in order.
    ⚠️ After `0005` the server only accepts encrypted chat messages, so everyone needs the new app. Its first run also resets reactions.
 3. **Authentication → Providers → Email**: keep it enabled.
@@ -87,16 +89,23 @@ Without this the app still works; you just only get notified while gng is open.
    (This replaces clicking together Database Webhooks in the dashboard, and keeps the secret out of git.)
 5. Rebuild the app. Push can be switched off per phone in **Settings**, and each chat can be muted from its ⋮ menu.
 
-Pushes contain only ids, never message text: the phone downloads and decrypts the message itself before showing it.
+Pushes never contain readable message text: they carry the still-encrypted message (when it fits in a push), plus
+names and unread counts, and the phone decrypts it itself. After pulling a new version of `supabase/functions/push`,
+deploy it again (`supabase functions deploy push --no-verify-jwt`).
+
+If notifications still arrive late on a phone, open gng's **Settings**: it shows a "Get notifications on time" row
+when the phone's battery saver is holding gng back (common on Xiaomi, Oppo, Vivo, Realme and Samsung).
 
 ## 4. Calls on mobile data (optional)
 
 Calls connect phone-to-phone. On some networks (campus Wi-Fi, some carriers) that's blocked and calls need a relay (a TURN server).
 A free tier is enough for a friend group, e.g. [Metered](https://www.metered.ca/tools/openrelay/) or Cloudflare Calls TURN.
-Add what they give you to `local.properties` (and as repo secrets for CI builds):
+Add what they give you to `local.properties` (and as repo secrets for CI builds). List every transport the
+provider offers, especially TLS on port 443 (`turns:...:443?transport=tcp`): it's the one that gets through strict
+Wi-Fi and carrier firewalls. For Metered (use your region's host):
 
 ```properties
-TURN_URLS=turn:global.relay.metered.ca:80,turns:global.relay.metered.ca:443?transport=tcp
+TURN_URLS=turn:asia.relay.metered.ca:80,turn:asia.relay.metered.ca:80?transport=tcp,turn:asia.relay.metered.ca:443,turns:asia.relay.metered.ca:443?transport=tcp
 TURN_USERNAME=...
 TURN_CREDENTIAL=...
 ```

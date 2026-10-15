@@ -80,11 +80,14 @@ class ChatRepository(
         }
     }
 
-    /** One message by id, e.g. when a push notification arrives. */
+    /**
+     * One message by id, e.g. when a push notification arrives. Not cached: the cache must stay a
+     * gap-free tail of the chat, since [syncNewer] only asks the server for what's after it.
+     */
     suspend fun fetchOne(id: Long, myId: String): ChatMessage? = withContext(Dispatchers.IO) {
         cache.get(id)?.takeIf { it.payload.t != "locked" }?.let { return@withContext it }
         client.from("messages").select { filter { eq("id", id) } }.decodeSingleOrNull<MessageRow>()
-            ?.let { decrypt(it, myId) }?.also { cache.put(listOf(it)) }
+            ?.let { decrypt(it, myId) }
     }
 
     /** Tries again on messages we couldn't open, after a new key epoch shows up. */
@@ -183,18 +186,23 @@ class ChatRepository(
     /** Decrypts and caches a reaction row; returns the emoji (null = removed). */
     suspend fun applyReaction(row: ReactionRow, myId: String): String? {
         val userId = row.userId ?: return null
-        val emoji = if (row.ciphertext == null || row.epoch == null) {
-            null
-        } else {
-            e2ee.keyFor(row.groupId, row.epoch, myId)?.let { key ->
-                runCatching {
-                    Aead.open(key, row.ciphertext.unb64(), reactionAad(row.groupId, row.messageId, userId)).decodeToString()
-                }.getOrNull()
-            }
-        }
+        val emoji = openReaction(row, myId)
         cache.putReaction(row.groupId, row.messageId, userId, emoji)
         return emoji
     }
+
+    /** Just the emoji, or null if it was removed or can't be opened. */
+    suspend fun openReaction(row: ReactionRow, myId: String): String? {
+        val userId = row.userId ?: return null
+        if (row.ciphertext == null || row.epoch == null) return null
+        val key = e2ee.keyFor(row.groupId, row.epoch, myId) ?: return null
+        return runCatching {
+            Aead.open(key, row.ciphertext.unb64(), reactionAad(row.groupId, row.messageId, userId)).decodeToString()
+        }.getOrNull()
+    }
+
+    /** A message we already have locally (e.g. to quote it in a reaction notification). */
+    suspend fun cachedMessage(id: Long): ChatMessage? = cache.get(id)
 
     suspend fun react(groupId: String, messageId: Long, myId: String, emoji: String?) = withContext(Dispatchers.IO) {
         val row = if (emoji == null) {
@@ -251,7 +259,8 @@ class ChatRepository(
             table = "read_states"
             filter("group_id", FilterOperator.EQ, groupId)
         }
-        val keys = channel.postgresChangeFlow<PostgresAction.Insert>(schema = "public") {
+        // New epochs, and old ones re-wrapped for us (we joined late or are on a new phone).
+        val keys = channel.postgresChangeFlow<PostgresAction>(schema = "public") {
             table = "conversation_keys"
             filter("group_id", FilterOperator.EQ, groupId)
         }

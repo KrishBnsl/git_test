@@ -64,7 +64,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.activity.compose.BackHandler
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -279,6 +289,10 @@ fun ChatContent(
     val tagged = remember { mutableStateListOf<String>() }
     var actionsFor by remember { mutableStateOf<ChatMessage?>(null) }
     var infoFor by remember { mutableStateOf<ChatMessage?>(null) }
+    var reactionsFor by remember { mutableStateOf<ChatMessage?>(null) }
+    val composerFocus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
     var viewing by remember { mutableStateOf<MediaRef?>(null) }
     var highlighted by remember { mutableStateOf<Long?>(null) }
     var stickersOpen by rememberSaveable { mutableStateOf(false) }
@@ -287,10 +301,25 @@ fun ChatContent(
     val reversed = remember(rows) { rows.asReversed() }
 
     // Stick to the bottom when something new arrives and you're already there (or you sent it).
+    // Otherwise count it on the "jump to latest" button.
     val newest = state.messages.lastOrNull()
+    var unseen by remember { mutableIntStateOf(0) }
     LaunchedEffect(newest?.clientId ?: newest?.id) {
-        if (newest != null && (listState.firstVisibleItemIndex <= 2 || newest.userId == ctx.me.id)) listState.animateScrollToItem(0)
+        if (newest == null) return@LaunchedEffect
+        if (listState.firstVisibleItemIndex <= 2 || newest.userId == ctx.me.id) listState.animateScrollToItem(0)
+        else if (newest.isUserMessage) unseen++
     }
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.firstVisibleItemIndex }.collect { if (it <= 2) unseen = 0 }
+    }
+    // Replying: put the cursor in the box, like WhatsApp.
+    LaunchedEffect(state.replyTo?.clientId ?: state.replyTo?.id) {
+        if (state.replyTo != null && ctx.canSendMessages && !stickersOpen) {
+            runCatching { composerFocus.requestFocus() }
+            keyboard?.show()
+        }
+    }
+    BackHandler(enabled = stickersOpen) { stickersOpen = false }
     // Infinite scroll upwards.
     val nearTop by remember {
         derivedStateOf { (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= listState.layoutInfo.totalItemsCount - 8 }
@@ -351,6 +380,7 @@ fun ChatContent(
                                     onOpenImage = { viewing = it },
                                     onOpenFile = actions.onOpenFile,
                                     onRetry = { actions.onRetry(m) },
+                                    onShowReactions = { reactionsFor = m },
                                 )
                             }
                         }
@@ -361,8 +391,10 @@ fun ChatContent(
                 }
             }
             androidx.compose.animation.AnimatedVisibility(scrolledUp, Modifier.align(Alignment.BottomEnd).padding(12.dp)) {
-                SmallFloatingActionButton(onClick = { scope.launch { listState.animateScrollToItem(0) } }) {
-                    GngIcon(GngIcons.ExpandMore, "Latest")
+                BadgedBox(badge = { if (unseen > 0) Badge { Text(if (unseen > 99) "99+" else "$unseen") } }) {
+                    SmallFloatingActionButton(onClick = { scope.launch { listState.animateScrollToItem(0) } }) {
+                        GngIcon(GngIcons.ExpandMore, if (unseen > 0) "$unseen new messages" else "Latest")
+                    }
                 }
             }
         }
@@ -397,7 +429,16 @@ fun ChatContent(
                 onDraft = { if (it.text.length <= 4000) draft = it },
                 placeholder = if (ctx.isDm) "Message ${ctx.title.substringBefore(' ')}" else "Message the gang",
                 stickersOpen = stickersOpen,
-                onToggleStickers = { stickersOpen = !stickersOpen },
+                focusRequester = composerFocus,
+                onToggleStickers = {
+                    // Stickers and the keyboard take the same space: show one or the other.
+                    if (!stickersOpen) {
+                        keyboard?.hide()
+                        focusManager.clearFocus()
+                    }
+                    stickersOpen = !stickersOpen
+                },
+                onFocused = { stickersOpen = false },
                 onPhotos = actions.onPhotos,
                 onFile = actions.onFile,
                 onSend = {
@@ -423,11 +464,26 @@ fun ChatContent(
             onReact = { actions.onReact(m, it); actionsFor = null },
             onReply = { actions.onReply(m); actionsFor = null },
             onInfo = { infoFor = m; actionsFor = null },
+            reactionCount = state.reactions[m.id].orEmpty().size,
+            onShowReactions = { reactionsFor = m; actionsFor = null },
             onSaveMedia = { m.payload.media?.let(actions.onSaveMedia); actionsFor = null },
             onSaveSticker = { m.payload.media?.let(actions.onSaveSticker); actionsFor = null },
             onRetry = { actions.onRetry(m); actionsFor = null },
             onDiscard = { actions.onDiscard(m); actionsFor = null },
         )
+    }
+    reactionsFor?.let { m ->
+        val forMessage = state.reactions[m.id].orEmpty()
+        if (forMessage.isEmpty()) {
+            // Everyone took theirs back.
+            LaunchedEffect(m.id) { reactionsFor = null }
+        } else {
+            ReactionsSheet(
+                ctx, forMessage,
+                onRemoveMine = { forMessage[ctx.me.id]?.let { actions.onReact(m, it) } },
+                onDismiss = { reactionsFor = null },
+            )
+        }
     }
     infoFor?.let { m ->
         InfoSheet(m, ctx, actions.receiptFor(m), actions.detailsFor(m), state.reactions[m.id].orEmpty(), onDismiss = { infoFor = null })
@@ -489,6 +545,8 @@ private fun Composer(
     onPhotos: () -> Unit,
     onFile: () -> Unit,
     onSend: () -> Unit,
+    focusRequester: FocusRequester = remember { FocusRequester() },
+    onFocused: () -> Unit = {},
 ) {
     val scheme = MaterialTheme.colorScheme
     var attach by remember { mutableStateOf(false) }
@@ -523,7 +581,8 @@ private fun Composer(
                         GngIcon(GngIcons.Mood, if (stickersOpen) "Hide stickers" else "Stickers", tint = if (stickersOpen) scheme.primary else scheme.onSurfaceVariant)
                     }
                 },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().focusRequester(focusRequester)
+                    .onFocusChanged { if (it.isFocused) onFocused() },
             )
         }
         Spacer(Modifier.width(8.dp))
@@ -621,8 +680,8 @@ private fun StickerPanel(store: StickerStore, onSend: (File) -> Unit) {
                     Text("No stickers yet", style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "Tap \"From WhatsApp\" and pick the WhatsApp Stickers folder it opens, or import a .wastickers pack. " +
-                            "You can also long-press any sticker in a chat to save it.",
+                        "Tap \"From WhatsApp\" and pick the WhatsApp Stickers folder it opens (or Android › media to " +
+                            "include WhatsApp Business), or import a .wastickers pack. You can also long-press any sticker in a chat to save it.",
                         style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -659,6 +718,8 @@ private fun MessageActionsSheet(
     onReact: (String) -> Unit,
     onReply: () -> Unit,
     onInfo: () -> Unit,
+    reactionCount: Int = 0,
+    onShowReactions: () -> Unit = {},
     onSaveMedia: () -> Unit,
     onSaveSticker: () -> Unit,
     onRetry: () -> Unit,
@@ -688,6 +749,7 @@ private fun MessageActionsSheet(
             SheetAction(GngIcons.Delete, "Delete", onDiscard)
         }
         if (!m.isPending) SheetAction(GngIcons.Reply, "Reply", onReply)
+        if (reactionCount > 0) SheetAction(GngIcons.AddReaction, "Reactions ($reactionCount)", onShowReactions)
         m.payload.text?.takeIf { it.isNotBlank() }?.let { text ->
             SheetAction(GngIcons.ContentCopy, "Copy") { clipboard.setText(AnnotatedString(text)); onDismiss() }
         }
@@ -705,6 +767,50 @@ private fun SheetAction(icon: Int, label: String, onClick: () -> Unit) {
         leadingContent = { GngIcon(icon, null) },
         headlineContent = { Text(label) },
     )
+}
+
+/** Who reacted with what, WhatsApp style: a tab per emoji, and tap your own to take it back. */
+@Composable
+private fun ReactionsSheet(
+    ctx: GroupContext,
+    reactions: Map<String, String>,
+    onRemoveMine: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val byEmoji = remember(reactions) {
+        reactions.entries.groupBy({ it.value }, { it.key }).entries.sortedByDescending { it.value.size }
+    }
+    var filter by remember { mutableStateOf<String?>(null) }
+    val shown = reactions.entries
+        .filter { filter == null || it.value == filter }
+        // You first, then everyone else by name.
+        .sortedWith(compareBy({ it.key != ctx.me.id }, { ctx.nameOf(it.key).lowercase() }))
+    GngSheet(title = "Reactions", onDismiss = onDismiss) {
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
+            item {
+                FilterChip(selected = filter == null, onClick = { filter = null }, label = { Text("All ${reactions.size}") })
+            }
+            items(byEmoji, key = { it.key }) { (emoji, people) ->
+                FilterChip(
+                    selected = filter == emoji,
+                    onClick = { filter = if (filter == emoji) null else emoji },
+                    label = { Text("$emoji ${people.size}") },
+                )
+            }
+        }
+        shown.forEach { (uid, emoji) ->
+            val person = ctx.person(uid)
+            val mine = uid == ctx.me.id
+            ListItem(
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                modifier = if (mine) Modifier.clickable { onRemoveMine(); onDismiss() } else Modifier,
+                leadingContent = { Avatar(person.name, person.photoUrl, size = 40.dp, colorKey = person.key) },
+                headlineContent = { Text(if (mine) "You" else person.name) },
+                supportingContent = if (mine) ({ Text("Tap to remove") }) else null,
+                trailingContent = { Text(emoji, fontSize = 22.sp) },
+            )
+        }
+    }
 }
 
 @Composable

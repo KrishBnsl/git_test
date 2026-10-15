@@ -122,7 +122,7 @@ data class Payload(
         "image" -> "📷 Photo" + (text?.let { " · $it" } ?: "")
         "file" -> "📎 ${media?.name ?: "File"}"
         "sticker" -> "Sticker"
-        "locked" -> "🔒 Encrypted message"
+        "locked" -> "🔒 Message (waiting to unlock)"
         else -> text.orEmpty()
     }
 }

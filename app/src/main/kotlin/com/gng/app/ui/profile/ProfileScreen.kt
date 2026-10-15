@@ -55,7 +55,7 @@ import com.gng.app.data.Profile
 import com.gng.app.data.ProfileRepository
 import com.gng.app.ui.components.Avatar
 import com.gng.app.ui.components.Choice
-import com.gng.app.ui.components.GngDatePickerDialog
+import com.gng.app.ui.components.BirthdayPickerDialog
 import com.gng.app.ui.components.GngIcon
 import com.gng.app.ui.components.SegmentedChoice
 import com.gng.app.ui.components.TonalIcon
@@ -289,8 +289,8 @@ fun ProfileForm(
     }
 
     if (pickDate) {
-        GngDatePickerDialog(
-            initial = birthday?.let(LocalDate::parse) ?: LocalDate.now().minusYears(19),
+        BirthdayPickerDialog(
+            initial = birthday?.let(LocalDate::parse),
             onDismiss = { pickDate = false },
         ) { birthday = it.toString(); pickDate = false }
     }

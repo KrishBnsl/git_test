@@ -1,5 +1,14 @@
 package com.gng.app.ui.settings
 
+import android.annotation.SuppressLint
+import android.app.NotificationManager
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -25,6 +34,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -61,9 +73,19 @@ fun SettingsScreen(me: Profile, onEditProfile: () -> Unit, onTimetable: () -> Un
     val push by c.settings.push.collectAsStateWithLifecycle(true)
     val previews by c.settings.previews.collectAsStateWithLifecycle(true)
     val receipts by c.settings.readReceipts.collectAsStateWithLifecycle(true)
+    val context = LocalContext.current
+    // Re-checked whenever you come back from the system settings page.
+    var restrictions by remember { mutableStateOf(DeliveryRestrictions.of(context)) }
+    LifecycleResumeEffect(Unit) {
+        restrictions = DeliveryRestrictions.of(context)
+        onPauseOrDispose {}
+    }
     SettingsContent(
         privacy = PrivacySettings(
             pushAvailable = c.push.available, push = push, previews = previews, readReceipts = receipts,
+            batteryRestricted = restrictions.battery, fullScreenBlocked = restrictions.fullScreen,
+            onFixBattery = { DeliveryRestrictions.fixBattery(context) },
+            onFixFullScreen = { DeliveryRestrictions.fixFullScreen(context) },
             onPush = { scope.launch { c.settings.setPush(it) } },
             onPreviews = { scope.launch { c.settings.setPreviews(it) } },
             onReadReceipts = { scope.launch { c.settings.setReadReceipts(it) } },
@@ -180,6 +202,28 @@ fun SettingsContent(
                     Switch(checked = privacy.push && privacy.pushAvailable, onCheckedChange = privacy.onPush, enabled = privacy.pushAvailable)
                 },
             )
+            if (privacy.push && privacy.pushAvailable && privacy.batteryRestricted) {
+                ListItem(
+                    colors = clear,
+                    modifier = Modifier.clickable(onClick = privacy.onFixBattery),
+                    leadingContent = { GngIcon(GngIcons.Bolt, null, tint = scheme.error) },
+                    headlineContent = { Text("Get notifications on time") },
+                    supportingContent = {
+                        Text("Your phone is saving battery on gng, which can hold back messages and calls. Tap and allow gng to run in the background.")
+                    },
+                    trailingContent = { GngIcon(GngIcons.ChevronRight, null) },
+                )
+            }
+            if (privacy.push && privacy.pushAvailable && privacy.fullScreenBlocked) {
+                ListItem(
+                    colors = clear,
+                    modifier = Modifier.clickable(onClick = privacy.onFixFullScreen),
+                    leadingContent = { GngIcon(GngIcons.Call, null, tint = scheme.error) },
+                    headlineContent = { Text("Show incoming calls full screen") },
+                    supportingContent = { Text("Right now calls only show as a small banner, and won't light up a locked phone. Tap to allow.") },
+                    trailingContent = { GngIcon(GngIcons.ChevronRight, null) },
+                )
+            }
             ListItem(
                 colors = clear,
                 leadingContent = { GngIcon(GngIcons.Visibility, null) },
@@ -251,7 +295,40 @@ data class PrivacySettings(
     val push: Boolean = true,
     val previews: Boolean = true,
     val readReceipts: Boolean = true,
+    /** The phone's battery saver may hold back pushes. */
+    val batteryRestricted: Boolean = false,
+    /** Android 14+: incoming calls can't take over the screen. */
+    val fullScreenBlocked: Boolean = false,
+    val onFixBattery: () -> Unit = {},
+    val onFixFullScreen: () -> Unit = {},
     val onPush: (Boolean) -> Unit = {},
     val onPreviews: (Boolean) -> Unit = {},
     val onReadReceipts: (Boolean) -> Unit = {},
 )
+
+/** Phone settings that make pushes and calls arrive late or quietly. */
+data class DeliveryRestrictions(val battery: Boolean, val fullScreen: Boolean) {
+    companion object {
+        fun of(context: Context): DeliveryRestrictions {
+            val power = context.getSystemService(PowerManager::class.java)
+            val battery = !power.isIgnoringBatteryOptimizations(context.packageName)
+            val fullScreen = Build.VERSION.SDK_INT >= 34 &&
+                !context.getSystemService(NotificationManager::class.java).canUseFullScreenIntent()
+            return DeliveryRestrictions(battery, fullScreen)
+        }
+
+        @SuppressLint("BatteryLife")
+        fun fixBattery(context: Context) {
+            val ask = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))
+            runCatching { context.startActivity(ask) }
+                .recoverCatching { context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+        }
+
+        fun fixFullScreen(context: Context) {
+            if (Build.VERSION.SDK_INT < 34) return
+            runCatching {
+                context.startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:${context.packageName}")))
+            }
+        }
+    }
+}

@@ -10,6 +10,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Bundle
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
@@ -18,15 +19,10 @@ import androidx.core.content.ContextCompat
 import com.gng.app.MainActivity
 import com.gng.app.R
 import com.gng.app.call.CallActivity
-import java.util.concurrent.ConcurrentHashMap
 
 /** Builds and posts every notification the app shows. */
 class Notifier(private val context: Context) {
-    data class Line(val sender: String, val text: String, val at: Long)
-
     private val manager = NotificationManagerCompat.from(context)
-    private val history = ConcurrentHashMap<String, MutableList<Line>>()
-    private val lastIds = ConcurrentHashMap<String, Long>()
 
     init {
         if (Build.VERSION.SDK_INT >= 26) {
@@ -56,6 +52,15 @@ class Notifier(private val context: Context) {
 
     // --- messages ---------------------------------------------------------------
 
+    /**
+     * Adds a line to a chat's notification, WhatsApp style: the last few messages, how many are
+     * unread, and a summary across chats. What's already showing is read back from the system, so
+     * the thread survives the app being killed between pushes.
+     *
+     * [unread]: the server's count of unread messages in this chat (null: count locally).
+     * [counts]: false for lines that aren't messages (reactions), so the unread count stays put.
+     * [totalUnread]/[unreadChats]: the server's counts across all chats, for the summary.
+     */
     @SuppressLint("MissingPermission")
     fun showMessage(
         groupId: String,
@@ -65,56 +70,133 @@ class Notifier(private val context: Context) {
         text: String,
         lastMessageId: Long,
         myName: String,
+        unread: Int? = null,
+        counts: Boolean = true,
+        totalUnread: Int? = null,
+        unreadChats: Int? = null,
+        quiet: Boolean = false,
     ) {
         if (!canPost()) return
-        if (lastMessageId > 0) lastIds[groupId] = lastMessageId
-        val lines = history.getOrPut(groupId) { mutableListOf() }.apply {
-            add(Line(sender, text, System.currentTimeMillis()))
-            while (size > 7) removeAt(0)
+        val id = groupId.hashCode()
+        val previous = active(id)
+        val lastId = lastMessageId.takeIf { it > 0 } ?: previous?.extras?.getLong(EXTRA_LAST_ID) ?: 0
+        val shownBefore = previous?.extras?.getInt(EXTRA_COUNT) ?: 0
+        val count = when {
+            !counts -> shownBefore
+            unread != null && unread > 0 -> unread
+            else -> shownBefore + 1
         }
+
         val me = Person.Builder().setName(myName).setKey("me").build()
         val style = NotificationCompat.MessagingStyle(me)
         if (!isDm) style.setConversationTitle(title).setGroupConversation(true)
-        lines.forEach { l ->
-            val person = if (l.sender == myName) me else Person.Builder().setName(l.sender).setKey(l.sender).build()
-            style.addMessage(l.text, l.at, person)
-        }
-        val id = groupId.hashCode()
+        val earlier = previous?.let { NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(it) }?.messages.orEmpty()
+        (earlier.takeLast(MAX_LINES - 1)).forEach { style.addMessage(it) }
+        val person = if (sender == myName) me else Person.Builder().setName(sender).setKey(sender).build()
+        style.addMessage(text, System.currentTimeMillis(), person)
+
         val reply = NotificationCompat.Action.Builder(
             android.R.drawable.ic_menu_send, "Reply",
-            actionIntent(NotificationActions.REPLY, groupId, lastMessageId, id, mutable = true),
+            actionIntent(NotificationActions.REPLY, groupId, lastId, id, mutable = true),
         ).addRemoteInput(RemoteInput.Builder(NotificationActions.KEY_TEXT).setLabel("Reply").build())
             .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY)
+            .setShowsUserInterface(false)
             .setAllowGeneratedReplies(true)
             .build()
         val markRead = NotificationCompat.Action.Builder(
-            android.R.drawable.ic_menu_view, "Mark read",
-            actionIntent(NotificationActions.MARK_READ, groupId, lastMessageId, id, mutable = false),
-        ).setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_MARK_AS_READ).build()
+            android.R.drawable.ic_menu_view, "Mark as read",
+            actionIntent(NotificationActions.MARK_READ, groupId, lastId, id, mutable = false),
+        ).setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_MARK_AS_READ)
+            .setShowsUserInterface(false)
+            .build()
 
         val n = NotificationCompat.Builder(context, CH_MESSAGES)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setStyle(style)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setSubText(if (count > 1) "$count new messages" else null)
+            .setNumber(count)
             .setAutoCancel(true)
-            .setGroup("gng-messages")
+            .setOnlyAlertOnce(quiet)
+            .setWhen(System.currentTimeMillis())
+            .setGroup(GROUP)
+            .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN)
             .setContentIntent(openChat(groupId, id))
             .addAction(reply)
             .addAction(markRead)
+            .addExtras(Bundle().apply {
+                putInt(EXTRA_COUNT, count)
+                putLong(EXTRA_LAST_ID, lastId)
+                putString(EXTRA_TITLE, title)
+                putString(EXTRA_PREVIEW, "$sender: $text")
+            })
             .build()
         manager.notify(id, n)
+        updateSummary(totalUnread, unreadChats)
     }
 
     /** Adds what you just replied from the notification, so the thread looks right. */
     fun appendMyReply(groupId: String, title: String, isDm: Boolean, myName: String, text: String) =
-        showMessage(groupId, title, isDm, myName, text, lastIds[groupId] ?: 0, myName)
+        showMessage(groupId, title, isDm, myName, text, 0, myName, counts = false, quiet = true)
 
     fun clearConversation(groupId: String) {
-        history.remove(groupId)
-        lastIds.remove(groupId)
         manager.cancel(groupId.hashCode())
+        updateSummary(null, null)
     }
+
+    /** The bundle header: "12 messages from 3 chats", with a line per chat. */
+    @SuppressLint("MissingPermission")
+    private fun updateSummary(totalUnread: Int?, unreadChats: Int?) {
+        val chats = activeMessages()
+        if (chats.isEmpty()) {
+            manager.cancel(SUMMARY_ID)
+            return
+        }
+        val messages = maxOf(totalUnread ?: 0, chats.sumOf { it.extras.getInt(EXTRA_COUNT).coerceAtLeast(1) })
+        val chatCount = maxOf(unreadChats ?: 0, chats.size)
+        val summary = "$messages message${if (messages == 1) "" else "s"}" +
+            if (chatCount > 1) " from $chatCount chats" else ""
+        val inbox = NotificationCompat.InboxStyle().setSummaryText(summary)
+        chats.take(6).forEach { n ->
+            val title = n.extras.getString(EXTRA_TITLE).orEmpty()
+            val preview = n.extras.getString(EXTRA_PREVIEW).orEmpty()
+            inbox.addLine(if (title.isEmpty()) preview else "$title  $preview")
+        }
+        val n = NotificationCompat.Builder(context, CH_MESSAGES)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle("gng")
+            .setContentText(summary)
+            .setStyle(inbox)
+            .setNumber(messages)
+            .setGroup(GROUP)
+            .setGroupSummary(true)
+            .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN)
+            .setAutoCancel(true)
+            .setContentIntent(
+                PendingIntent.getActivity(
+                    context, SUMMARY_ID, Intent(context, MainActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
+            .build()
+        manager.notify(SUMMARY_ID, n)
+    }
+
+    private fun active(id: Int): Notification? =
+        runCatching { manager.activeNotifications.firstOrNull { it.id == id && it.packageName == context.packageName }?.notification }
+            .getOrNull()
+
+    private fun activeMessages(): List<Notification> =
+        runCatching {
+            manager.activeNotifications
+                .filter { it.notification.channelIdCompat() == CH_MESSAGES && it.id != SUMMARY_ID && it.notification.group == GROUP }
+                .sortedByDescending { it.postTime }
+                .map { it.notification }
+        }.getOrDefault(emptyList())
+
+    private fun Notification.channelIdCompat(): String? = if (Build.VERSION.SDK_INT >= 26) channelId else CH_MESSAGES
 
     // --- calls --------------------------------------------------------------------
 
@@ -197,5 +279,12 @@ class Notifier(private val context: Context) {
         const val CH_CALLS = "incoming_calls"
         const val CH_ONGOING = "ongoing_call"
         const val RING_TIMEOUT_MS = 45_000L
+        private const val GROUP = "gng-messages"
+        private const val SUMMARY_ID = 1
+        private const val MAX_LINES = 8
+        private const val EXTRA_COUNT = "gng.count"
+        private const val EXTRA_LAST_ID = "gng.last_id"
+        private const val EXTRA_TITLE = "gng.title"
+        private const val EXTRA_PREVIEW = "gng.preview"
     }
 }

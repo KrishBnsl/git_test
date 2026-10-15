@@ -73,6 +73,8 @@ class ChatViewModel(private val c: AppContainer, private val ctx: GroupContext) 
             markSeen()
         }
         viewModelScope.launch { listen() }
+        // If someone here can't read older messages yet (new member, new phone), share the keys.
+        viewModelScope.launch { runCatching { c.e2ee.shareHistory(myId) } }
         // Anything sent between the first sync and the realtime channel coming up.
         viewModelScope.launch {
             delay(2_500)
@@ -108,7 +110,12 @@ class ChatViewModel(private val c: AppContainer, private val ctx: GroupContext) 
                             keyRetry?.cancel()
                             keyRetry = viewModelScope.launch {
                                 delay(600)
-                                runCatching { merge(c.chat.retryLocked(groupId, myId)) }
+                                runCatching {
+                                    merge(c.chat.retryLocked(groupId, myId))
+                                    // Reactions we couldn't open before may be readable now too.
+                                    val oldest = messages.firstOrNull { it.id > 0 }?.id ?: 0
+                                    reactions = c.chat.syncReactions(groupId, oldest, myId)
+                                }
                             }
                         }
                     }
@@ -176,27 +183,35 @@ class ChatViewModel(private val c: AppContainer, private val ctx: GroupContext) 
         send(withReply(Payload("text", text = body, mentions = mentions.takeIf { it.isNotEmpty() })))
     }
 
-    fun sendImages(context: Context, uris: List<Uri>) = uris.take(10).forEach { uri ->
+    // Uploads take a while, so each of these takes the reply target when you hit send, not when the upload finishes.
+
+    fun sendImages(context: Context, uris: List<Uri>) = uris.take(10).forEachIndexed { i, uri ->
+        // Several photos at once: only the first one is the reply.
+        val base = if (i == 0) withReply(Payload("image")) else Payload("image")
         upload {
             val picked = c.media.read(uri)
             val image = c.media.prepareImage(picked.bytes)
-            val ref = c.media.upload(groupId, image.bytes, "image/jpeg", picked.name, image.width, image.height, image.thumb)
-            withReply(Payload("image", media = ref))
+            base.copy(media = c.media.upload(groupId, image.bytes, "image/jpeg", picked.name, image.width, image.height, image.thumb))
         }
     }
 
-    fun sendFile(uri: Uri) = upload {
-        val picked = c.media.read(uri)
-        if (picked.mime.startsWith("image/") && !picked.mime.contains("gif")) {
-            val image = c.media.prepareImage(picked.bytes)
-            withReply(Payload("image", media = c.media.upload(groupId, image.bytes, "image/jpeg", picked.name, image.width, image.height, image.thumb)))
-        } else {
-            withReply(Payload("file", media = c.media.upload(groupId, picked.bytes, picked.mime, picked.name)))
+    fun sendFile(uri: Uri) {
+        val base = withReply(Payload("file"))
+        upload {
+            val picked = c.media.read(uri)
+            if (picked.mime.startsWith("image/") && !picked.mime.contains("gif")) {
+                val image = c.media.prepareImage(picked.bytes)
+                base.copy(t = "image", media = c.media.upload(groupId, image.bytes, "image/jpeg", picked.name, image.width, image.height, image.thumb))
+            } else {
+                base.copy(media = c.media.upload(groupId, picked.bytes, picked.mime, picked.name))
+            }
         }
     }
 
-    fun sendSticker(file: File) = upload {
-        Payload("sticker", media = c.media.uploadSticker(groupId, file.readBytes()))
+    /** Stickers can be replies too. */
+    fun sendSticker(file: File) {
+        val base = withReply(Payload("sticker"))
+        upload { base.copy(media = c.media.uploadSticker(groupId, file.readBytes())) }
     }
 
     private fun upload(build: suspend () -> Payload) {

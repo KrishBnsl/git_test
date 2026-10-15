@@ -43,7 +43,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -104,8 +106,10 @@ fun MessageBubble(
     onOpenImage: (MediaRef) -> Unit,
     onOpenFile: (MediaRef) -> Unit,
     onRetry: () -> Unit,
+    onShowReactions: () -> Unit = {},
 ) {
     val scheme = MaterialTheme.colorScheme
+    val haptics = LocalHapticFeedback.current
     val palette = remember(scheme) { avatarColors(scheme) }
     val oneToOne = ctx.isDm
     val person = ctx.person(m.userId)
@@ -129,7 +133,11 @@ fun MessageBubble(
                     onDragCancel = { scope.launch { swipe.animateTo(0f) } },
                     onHorizontalDrag = { change, amount ->
                         change.consume()
-                        scope.launch { swipe.snapTo((swipe.value + amount).coerceIn(0f, maxSwipe)) }
+                        val before = swipe.value
+                        val after = (before + amount).coerceIn(0f, maxSwipe)
+                        // A tick when you've pulled far enough to reply.
+                        if (before <= maxSwipe * 0.7f && after > maxSwipe * 0.7f) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        scope.launch { swipe.snapTo(after) }
                     },
                 )
             },
@@ -168,7 +176,10 @@ fun MessageBubble(
                             }
                         },
                         onDoubleClick = onDoubleTap,
-                        onLongClick = onLongPress,
+                        onLongClick = {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onLongPress()
+                        },
                     )
                     BubbleBody(m, ctx, mine, run, media, clicks, onQuoteTap)
                     if (reactions.isNotEmpty()) {
@@ -176,6 +187,7 @@ fun MessageBubble(
                             reactions, ctx.me.id,
                             Modifier.align(if (mine) Alignment.TopStart else Alignment.TopEnd)
                                 .offset(x = if (mine) (-10).dp else 10.dp, y = (-14).dp),
+                            onClick = onShowReactions,
                         )
                     }
                 }
@@ -262,7 +274,7 @@ private fun BubbleBody(
                     GngIcon(GngIcons.Lock, null, size = 16.dp)
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        "Can't decrypt this one (sent before you joined, or to your old phone)",
+                        "Waiting for this message. It unlocks when someone in the chat opens gng.",
                         style = MaterialTheme.typography.bodyMedium, modifier = Modifier.alpha(0.8f),
                     )
                 }
@@ -328,10 +340,12 @@ private fun QuoteBlock(userId: String?, text: String?, ctx: GroupContext, mine: 
     }
 }
 
+/** The little reaction pill on a bubble. Tap it to see who reacted. */
 @Composable
-private fun TapbackBadge(reactions: Map<String, String>, myId: String, modifier: Modifier) {
+private fun TapbackBadge(reactions: Map<String, String>, myId: String, modifier: Modifier, onClick: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
     Surface(
+        onClick = onClick,
         shape = CircleShape,
         color = if (myId in reactions) scheme.secondaryContainer else scheme.surfaceContainerHighest,
         shadowElevation = 2.dp,
