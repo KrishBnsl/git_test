@@ -16,9 +16,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.gng.app.data.ThemeMode
 import com.gng.app.ui.root.RootScreen
+import com.gng.app.ui.theme.Accent
 import com.gng.app.ui.theme.GngTheme
 import com.gng.core.InviteCodes
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 class MainActivity : ComponentActivity() {
     private var openGroup by mutableStateOf<String?>(null)
@@ -31,10 +34,13 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         container.updates.checkIfDue()
         handle(intent)
+        // Read the look before the first frame (a few ms, behind the splash), so it never flashes the default.
+        val cachedAccent = runBlocking { container.settings.accent.first() }
+        val cachedTheme = runBlocking { container.settings.theme.first() }
         setContent {
-            val theme by container.settings.theme.collectAsStateWithLifecycle(ThemeMode.System)
-            val dynamic by container.settings.dynamicColor.collectAsStateWithLifecycle(true)
-            GngTheme(theme, dynamic) {
+            val theme by container.settings.theme.collectAsStateWithLifecycle(cachedTheme)
+            val accent by container.settings.accent.collectAsStateWithLifecycle(initialValue = cachedAccent)
+            GngTheme(theme, Accent.from(accent)) {
                 RootScreen(
                     openGroup = openGroup, onOpened = { openGroup = null },
                     inviteCode = inviteCode, onInviteHandled = { inviteCode = null },
@@ -49,7 +55,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handle(intent: Intent) {
-        intent.getStringExtra(EXTRA_OPEN_GROUP)?.let { openGroup = it }
+        intent.getStringExtra(EXTRA_OPEN_GROUP)?.let { group ->
+            // "Call back" from a missed call: open the chat and start the call there.
+            openGroup = intent.getStringExtra(EXTRA_CALL_BACK)?.let { "$group?call=$it" } ?: group
+        }
         val data = intent.data
         if (intent.action == Intent.ACTION_VIEW && data != null && (data.scheme == "gng" || data.host == INVITE_HOST)) {
             InviteCodes.fromScan(data.toString())?.let { inviteCode = it }
@@ -72,6 +81,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_OPEN_GROUP = "open_group"
+        const val EXTRA_CALL_BACK = "call_back"
         private const val INVITE_HOST = "krishbnsl.github.io"
     }
 }

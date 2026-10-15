@@ -1,5 +1,7 @@
 package com.gng.app.debug
 
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.background
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -73,8 +75,9 @@ class GalleryActivity : ComponentActivity() {
         val screen = intent.getStringExtra("screen") ?: "chat"
         val dark = intent.getBooleanExtra("dark", false)
         val dynamic = intent.getBooleanExtra("dynamic", false)
+        val accent = com.gng.app.ui.theme.Accent.from(intent.getStringExtra("accent"))
         setContent {
-            GngTheme(if (dark) ThemeMode.Dark else ThemeMode.Light, dynamic) {
+            GngTheme(if (dark) ThemeMode.Dark else ThemeMode.Light, if (dynamic) com.gng.app.ui.theme.Accent.Wallpaper else accent) {
                 Surface(Modifier.fillMaxSize()) { Screen(screen) }
             }
         }
@@ -166,8 +169,9 @@ private fun Screen(name: String) {
             StudyContent(s.ctx, s.exams, s.materials, s.votes, null, {}, {}, {}, {}, {})
         }
         "timetable" -> TimetableContent(s.myClasses, null, {}, {}, {}, {}, DayOfWeek.of(java.time.LocalDate.now().dayOfWeek.value))
+        "icon" -> IconSheet()
         "settings" -> SettingsContent(
-            s.me, ThemeMode.System, true, {}, {}, {}, {}, {}, {},
+            s.me, ThemeMode.System, com.gng.app.ui.theme.Accent.Blue, {}, {}, {}, {}, {}, {},
             updateState = UpdateState.Available(sampleUpdate), currentVersion = "0.2.1",
         )
         "map" -> Group(GroupTab.Map) { MapScreen(selected = null) }
@@ -197,3 +201,56 @@ private fun Screen(name: String) {
         else -> Text("Unknown screen: $name")
     }
 }
+
+/** The launcher icon (as Android draws it), the themed-icon version and the status bar glyph, big. */
+@Composable
+private fun IconSheet() {
+    androidx.compose.foundation.layout.Column(
+        Modifier.fillMaxSize().systemBarsPadding().padding(24.dp),
+        verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(24.dp),
+    ) {
+        androidx.compose.foundation.layout.Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(24.dp)) {
+            listOf(androidx.compose.ui.graphics.Color.White, androidx.compose.ui.graphics.Color(0xFF111418)).forEach { bg ->
+                androidx.compose.foundation.layout.Box(
+                    Modifier.size(150.dp).androidxBackground(bg),
+                    contentAlignment = androidx.compose.ui.Alignment.Center,
+                ) {
+                    androidx.compose.ui.viewinterop.AndroidView({ ctx ->
+                        android.widget.ImageView(ctx).apply { setImageResource(com.gng.app.R.mipmap.ic_launcher) }
+                    }, Modifier.size(120.dp))
+                }
+            }
+        }
+        androidx.compose.foundation.layout.Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(24.dp)) {
+            // Themed icon (Android 13+ draws the monochrome layer on a tinted circle).
+            androidx.compose.foundation.layout.Box(
+                Modifier.size(120.dp).androidxBackground(androidx.compose.ui.graphics.Color(0xFFD6E3FF), circle = true),
+                contentAlignment = androidx.compose.ui.Alignment.Center,
+            ) {
+                androidx.compose.material3.Icon(
+                    androidx.compose.ui.res.painterResource(com.gng.app.R.drawable.ic_launcher_monochrome), null,
+                    Modifier.size(120.dp), tint = androidx.compose.ui.graphics.Color(0xFF1B3A73),
+                )
+            }
+            androidx.compose.foundation.layout.Box(
+                Modifier.size(120.dp).androidxBackground(androidx.compose.ui.graphics.Color(0xFF111418)),
+                contentAlignment = androidx.compose.ui.Alignment.Center,
+            ) {
+                androidx.compose.material3.Icon(
+                    androidx.compose.ui.res.painterResource(com.gng.app.R.drawable.ic_notification), null,
+                    Modifier.size(72.dp), tint = androidx.compose.ui.graphics.Color.White,
+                )
+            }
+        }
+        androidx.compose.foundation.layout.Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(16.dp)) {
+            listOf(48, 36, 24).forEach { dp ->
+                androidx.compose.ui.viewinterop.AndroidView({ ctx ->
+                    android.widget.ImageView(ctx).apply { setImageResource(com.gng.app.R.mipmap.ic_launcher) }
+                }, Modifier.size(dp.dp))
+            }
+        }
+    }
+}
+
+private fun Modifier.androidxBackground(color: androidx.compose.ui.graphics.Color, circle: Boolean = false) =
+    this.then(Modifier.background(color, if (circle) androidx.compose.foundation.shape.CircleShape else androidx.compose.foundation.shape.RoundedCornerShape(24.dp)))

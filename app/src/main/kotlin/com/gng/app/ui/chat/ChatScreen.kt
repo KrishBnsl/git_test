@@ -1,5 +1,7 @@
 package com.gng.app.ui.chat
 
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.foundation.layout.heightIn
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -146,6 +148,10 @@ data class ChatUiState(
     val outgoingRequest: Boolean = false,
     /** Your message being edited in the composer. */
     val editing: ChatMessage? = null,
+    /** User ids of people typing right now. */
+    val typing: List<String> = emptyList(),
+    /** What you'd typed here last time and didn't send (null while loading). */
+    val initialDraft: String? = null,
 )
 
 /** What the chat can do. Defaults do nothing, for previews. */
@@ -176,6 +182,7 @@ data class ChatActions(
     val canDeleteForEveryone: (ChatMessage) -> Boolean = { false },
     val onDeleteForEveryone: (ChatMessage) -> Unit = {},
     val onDeleteForMe: (ChatMessage) -> Unit = {},
+    val onDraftChanged: (String) -> Unit = {},
     /** Exact delivered/seen times per person, for the Info sheet. */
     val loadReceipts: suspend (ChatMessage) -> List<Pair<String, String>> = { emptyList() },
 )
@@ -231,6 +238,8 @@ fun ChatScreen(ctx: GroupContext, onOpenEvent: (ChatMessage) -> Unit, onClosed: 
             vm.messages, vm.reactions, vm.loaded, vm.reachedStart, vm.uploads, vm.replyTo,
             incomingRequest = vm.incomingRequest, outgoingRequest = vm.outgoingRequest,
             editing = vm.editing,
+            typing = vm.typing,
+            initialDraft = vm.initialDraft,
         ),
         media = media,
         stickers = c.stickers,
@@ -268,6 +277,7 @@ fun ChatScreen(ctx: GroupContext, onOpenEvent: (ChatMessage) -> Unit, onClosed: 
             onDeleteForEveryone = { vm.deleteForEveryone(it) },
             onDeleteForMe = { vm.deleteForMe(it) },
             loadReceipts = vm::exactReceipts,
+            onDraftChanged = vm::onDraftChanged,
         ),
     )
 }
@@ -371,6 +381,15 @@ fun ChatContent(
         keyboard?.show()
     }
     var deleting by remember { mutableStateOf<ChatMessage?>(null) }
+    // Pick up where you left off: last time's unsent text comes back into the box.
+    var draftRestored by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(state.initialDraft) {
+        val saved = state.initialDraft ?: return@LaunchedEffect
+        if (!draftRestored && draft.text.isEmpty() && saved.isNotEmpty() && state.editing == null) {
+            draft = TextFieldValue(saved, TextRange(saved.length))
+        }
+        draftRestored = true
+    }
     // Infinite scroll upwards.
     val nearTop by remember {
         derivedStateOf { (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= listState.layoutInfo.totalItemsCount - 8 }
@@ -456,6 +475,7 @@ fun ChatContent(
                 color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp),
             )
         }
+        if (state.typing.isNotEmpty()) TypingLine(state.typing.map { ctx.nameOf(it).substringBefore(' ') }, ctx.isDm)
         state.replyTo?.let { target -> ReplyBanner(target, ctx, onClose = { actions.onReply(null) }) }
         state.editing?.let { target ->
             EditBanner(target, onClose = {
@@ -469,24 +489,34 @@ fun ChatContent(
         } else if (ctx.canSendMessages) {
             // "@ar" right before the cursor: suggest people to tag (gangs only).
             val query = if (ctx.isDm) null else mentionQuery(draft)
+            // Everyone who matches (the list scrolls), plus @all at the top.
             val suggestions = remember(query, ctx.members) {
                 query?.let { q ->
-                    ctx.members.values.filter { it.id != ctx.me.id && it.displayName.contains(q.text, ignoreCase = true) }
-                        .sortedBy { !it.displayName.startsWith(q.text, ignoreCase = true) }
-                        .take(5)
+                    ctx.members.values.filter {
+                        it.id != ctx.me.id && (it.displayName.contains(q.text, ignoreCase = true) ||
+                            it.username?.startsWith(q.text, ignoreCase = true) == true)
+                    }.sortedWith(compareBy({ !it.displayName.startsWith(q.text, ignoreCase = true) }, { it.displayName.lowercase() }))
                 }.orEmpty()
             }
-            if (query != null && suggestions.isNotEmpty()) {
-                MentionSuggestions(suggestions) { person ->
-                    val insert = "@${person.displayName} "
+            val offerAll = query != null && ctx.members.size > 2 &&
+                (ALL_TAG.startsWith(query.text, ignoreCase = true) || "everyone".startsWith(query.text, ignoreCase = true))
+            if (query != null && (suggestions.isNotEmpty() || offerAll)) {
+                MentionSuggestions(suggestions, offerAll = offerAll, memberCount = ctx.members.size - 1) { person ->
+                    val name = person?.displayName ?: ALL_TAG
+                    val insert = "@$name "
                     val text = draft.text.replaceRange(query.start, draft.selection.start, insert)
                     draft = TextFieldValue(text, TextRange(query.start + insert.length))
-                    tagged += person.id
+                    tagged += person?.id ?: ChatViewModel.EVERYONE
                 }
             }
             Composer(
                 draft = draft,
-                onDraft = { if (it.text.length <= 4000) draft = it },
+                onDraft = {
+                    if (it.text.length <= 4000) {
+                        if (it.text != draft.text) actions.onDraftChanged(it.text)
+                        draft = it
+                    }
+                },
                 placeholder = if (ctx.isDm) "Message ${ctx.title.substringBefore(' ')}" else "Message the gang",
                 stickersOpen = stickersOpen,
                 editing = state.editing != null,
@@ -505,6 +535,7 @@ fun ChatContent(
                 onSend = {
                     actions.onSend(draft.text, tagged.toList())
                     draft = TextFieldValue("")
+                    actions.onDraftChanged("")
                     tagged.clear()
                 },
             )
@@ -620,6 +651,35 @@ private fun RequestBar(ctx: GroupContext, onAccept: () -> Unit, onDecline: () ->
                 Button(onClick = onAccept, modifier = Modifier.weight(1f)) { Text("Accept") }
             }
         }
+    }
+}
+
+/** "Aman is typing…" with three bouncing dots. */
+@Composable
+private fun TypingLine(names: List<String>, dm: Boolean) {
+    val scheme = MaterialTheme.colorScheme
+    val dots = androidx.compose.animation.core.rememberInfiniteTransition(label = "typing")
+    val phase by dots.animateFloat(
+        0f, 3f, androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(900)), label = "dots",
+    )
+    Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        repeat(3) { i ->
+            Box(
+                Modifier.padding(end = 3.dp).size(6.dp).graphicsLayer {
+                    translationY = if (phase.toInt() == i) -4f else 0f
+                }.clip(CircleShape).background(scheme.primary),
+            )
+        }
+        Spacer(Modifier.width(6.dp))
+        Text(
+            when {
+                dm -> "typing…"
+                names.size == 1 -> "${names[0]} is typing…"
+                names.size == 2 -> "${names[0]} and ${names[1]} are typing…"
+                else -> "${names.size} people are typing…"
+            },
+            style = MaterialTheme.typography.labelMedium, color = scheme.primary,
+        )
     }
 }
 
@@ -751,27 +811,51 @@ private fun mentionQuery(value: TextFieldValue): MentionQuery? {
     return MentionQuery(at, q)
 }
 
+/** People to tag (null = @all). Scrolls when there are many. */
 @Composable
-private fun MentionSuggestions(people: List<Profile>, onPick: (Profile) -> Unit) {
+private fun MentionSuggestions(people: List<Profile>, offerAll: Boolean, memberCount: Int, onPick: (Profile?) -> Unit) {
+    val scheme = MaterialTheme.colorScheme
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        color = scheme.surfaceContainerHigh,
         shape = RoundedCornerShape(20.dp),
         shadowElevation = 4.dp,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
     ) {
-        Column(Modifier.padding(vertical = 6.dp)) {
-            people.forEach { p ->
+        LazyColumn(Modifier.heightIn(max = 260.dp), contentPadding = PaddingValues(vertical = 6.dp)) {
+            if (offerAll) {
+                item(key = "all") {
+                    Row(
+                        Modifier.fillMaxWidth().clickable { onPick(null) }.padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(Modifier.size(32.dp).clip(CircleShape).background(scheme.primary), contentAlignment = Alignment.Center) {
+                            GngIcon(GngIcons.Groups, null, size = 18.dp, tint = scheme.onPrimary)
+                        }
+                        Column(Modifier.padding(start = 12.dp)) {
+                            Text("@$ALL_TAG", style = MaterialTheme.typography.bodyLarge)
+                            Text("Notify all $memberCount people", style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+            items(people, key = { it.id }) { p ->
                 Row(
                     Modifier.fillMaxWidth().clickable { onPick(p) }.padding(horizontal = 14.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Avatar(p.displayName, p.avatarUrl, size = 32.dp, colorKey = p.id)
-                    Text(p.displayName, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(start = 12.dp))
+                    Column(Modifier.padding(start = 12.dp)) {
+                        Text(p.displayName, style = MaterialTheme.typography.bodyLarge)
+                        p.handle?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant) }
+                    }
                 }
             }
         }
     }
 }
+
+/** What @all looks like in a message. */
+const val ALL_TAG = "all"
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable

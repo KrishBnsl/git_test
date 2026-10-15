@@ -64,6 +64,8 @@ Deno.serve(async (req) => {
   const token = googleAccessToken().catch(() => null);
 
   if (payload.table === "messages" && payload.type === "INSERT") {
+    // "Aman started a call": the ringing already told everyone, so no second notification.
+    if (r.kind === "call") return new Response("ok");
     const groupId = r.group_id as string;
     const sender = r.user_id as string | null;
     const [names, recipients] = await Promise.all([names_(groupId, sender), recipients_(groupId, sender)]);
@@ -116,8 +118,21 @@ Deno.serve(async (req) => {
       ...names,
     }, { respectMute: false, ttlSeconds: 45 });
   } else if (payload.table === "calls" && payload.type === "UPDATE" && r.ended_at && !payload.old_record?.ended_at) {
-    await send(token, await recipients_(r.group_id as string, null), { type: "call_end", call_id: r.id as string },
-      { respectMute: false, ttlSeconds: 60 });
+    // Stops the ringing everywhere; if nobody picked up, phones show "Missed call from Aman".
+    const missed = !r.answered_at;
+    const [names, recipients] = await Promise.all([
+      missed ? names_(r.group_id as string, r.started_by as string) : Promise.resolve({}),
+      recipients_(r.group_id as string, null),
+    ]);
+    await send(token, recipients, {
+      type: "call_end",
+      call_id: r.id as string,
+      group_id: r.group_id as string,
+      started_by: r.started_by as string,
+      video: String(r.video),
+      ...(missed ? { missed: "true" } : {}),
+      ...names,
+    }, { respectMute: false, ttlSeconds: missed ? 86400 : 60 });
   } else if (payload.table === "group_members" && payload.type === "INSERT") {
     // Someone joined: whoever is online shares the chat's history keys with them.
     const groupId = r.group_id as string;

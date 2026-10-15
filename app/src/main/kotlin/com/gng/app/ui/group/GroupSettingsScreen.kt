@@ -1,5 +1,8 @@
 package com.gng.app.ui.group
 
+import androidx.compose.ui.draw.clip
+import com.gng.app.ui.people.PhotoViewer
+import com.gng.app.ui.people.PersonSheet
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -219,14 +222,11 @@ fun GroupSettingsContent(
             ) {
                 // Header
                 Column(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Box(
-                        Modifier.then(
-                            if (ctx.canEditGroup) Modifier.clickable {
-                                picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                            } else Modifier,
-                        ),
-                    ) {
-                        GroupAvatar(group.icon, group.photoUrl, size = 112.dp, contentDescription = group.name)
+                    var viewPhoto by remember { mutableStateOf(false) }
+                    if (viewPhoto) PhotoViewer(group.photoUrl, group.name, group.id, onDismiss = { viewPhoto = false })
+                    // Tap to see the photo big; the camera badge changes it.
+                    Box(Modifier.clip(CircleShape).clickable { viewPhoto = true }) {
+                        GroupAvatar(group.icon, group.photoUrl, size = 112.dp, contentDescription = group.name, colorKey = group.id)
                         if (ctx.canEditGroup) {
                             Box(
                                 Modifier
@@ -236,7 +236,11 @@ fun GroupSettingsContent(
                                     .padding(3.dp)
                                     .background(scheme.primary, CircleShape),
                                 contentAlignment = Alignment.Center,
-                            ) { GngIcon(GngIcons.AddAPhoto, "Change gang photo", tint = scheme.onPrimary, size = 20.dp) }
+                            ) {
+                                IconButton(onClick = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
+                                    GngIcon(GngIcons.AddAPhoto, "Change gang photo", tint = scheme.onPrimary, size = 20.dp)
+                                }
+                            }
                         }
                     }
                     Spacer(Modifier.height(12.dp))
@@ -391,7 +395,12 @@ private fun MemberRow(
 ) {
     val scheme = MaterialTheme.colorScheme
     var menu by remember { mutableStateOf(false) }
-    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+    var showing by remember { mutableStateOf(false) }
+    if (showing) PersonSheet(profile, isMe = isMe, onDismiss = { showing = false }, onMessage = { showing = false; onMessage() })
+    Row(
+        Modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium).clickable { showing = true }.padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Avatar(profile.displayName, profile.avatarUrl, size = 44.dp, colorKey = profile.id)
         Column(Modifier.padding(horizontal = 14.dp).weight(1f)) {
             Text(profile.displayName + if (isMe) " (you)" else "", style = MaterialTheme.typography.titleSmall)

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Status bar icon: the gng "g", filling the 24dp canvas. White; Android tints it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group android:pivotX="54" android:pivotY="54" android:scaleX="1.65" android:scaleY="1.65" android:translateX="-0.8" android:translateY="-4.5">
+        <path
+            android:pathData="M68,32V68A12,12 0,0 1,45.6 74"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="10"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <path android:fillColor="#FFFFFFFF" android:fillType="evenOdd" android:pathData="M36,48a18,18 0,1 0,36 0a18,18 0,1 0,-36 0 M39.3,48a3.2,3.2 0,1 0,6.4 0a3.2,3.2 0,1 0,-6.4 0 M45.7,48a3.8,3.8 0,1 0,7.6 0a3.8,3.8 0,1 0,-7.6 0 M53.3,48a3.2,3.2 0,1 0,6.4 0a3.2,3.2 0,1 0,-6.4 0" />
+    </group>
+</vector>

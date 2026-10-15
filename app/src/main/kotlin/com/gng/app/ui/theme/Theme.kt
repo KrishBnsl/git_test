@@ -10,6 +10,7 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -25,18 +26,19 @@ val LocalIsDark = staticCompositionLocalOf { false }
 val DynamicColorSupported: Boolean get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
 
 @Composable
-fun GngTheme(mode: ThemeMode, dynamicColor: Boolean, content: @Composable () -> Unit) {
+fun GngTheme(mode: ThemeMode, accent: Accent, content: @Composable () -> Unit) {
     val dark = when (mode) {
         ThemeMode.System -> isSystemInDarkTheme()
         ThemeMode.Light -> false
         ThemeMode.Dark -> true
     }
     val context = LocalContext.current
-    val colors = when {
-        dynamicColor && DynamicColorSupported ->
+    val colors = remember(accent, dark) {
+        if (accent == Accent.Wallpaper && DynamicColorSupported) {
             if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        dark -> BrandDarkColors
-        else -> BrandLightColors
+        } else {
+            accentScheme(accent, dark)
+        }
     }
 
     // The activity is edge-to-edge; make the system bar icons readable when the app theme

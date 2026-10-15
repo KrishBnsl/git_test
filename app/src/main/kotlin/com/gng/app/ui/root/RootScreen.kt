@@ -67,13 +67,30 @@ class RootViewModel(private val c: AppContainer) : ViewModel() {
 
     private var session: Job? = null
 
+    /**
+     * Opens straight away with the profile saved on the phone, then refreshes it from the server.
+     * Only a first launch (nothing saved) waits for the network.
+     */
     private suspend fun loadProfile(uid: String) {
+        val saved = c.chat.cachedProfile(uid)
+        if (saved != null) {
+            _state.value = RootState.Ready(saved)
+            startSession(uid)
+            runCatching { c.profiles.get(uid) }.getOrNull()?.let { fresh ->
+                c.chat.rememberProfile(fresh)
+                if (fresh != saved) _state.value = RootState.Ready(fresh)
+            }
+            return
+        }
         _state.value = RootState.Loading
         _state.value = runCatching { c.profiles.get(uid) }.fold(
             onSuccess = { if (it == null) RootState.NeedsProfile(uid) else RootState.Ready(it) },
             onFailure = { RootState.Offline },
         )
-        if (_state.value is RootState.Ready) startSession(uid)
+        (_state.value as? RootState.Ready)?.let {
+            c.chat.rememberProfile(it.me)
+            startSession(uid)
+        }
     }
 
     /** Things that run while you're signed in: encryption key, push token, incoming calls. */
@@ -89,7 +106,9 @@ class RootViewModel(private val c: AppContainer) : ViewModel() {
             launch {
                 while (true) {
                     runCatching {
+                        runCatching { c.calls.setActiveCalls(c.chat.activeCalls()) }
                         c.chat.callChanges().collect { call ->
+                            c.calls.onCallChanged(call)
                             if (call.endedAt != null) c.calls.remoteEnded(call.id) else c.inbox.onCall(call)
                         }
                     }
@@ -105,6 +124,7 @@ class RootViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     fun profileSaved(p: Profile) {
+        viewModelScope.launch { c.chat.rememberProfile(p) }
         val first = _state.value !is RootState.Ready
         _state.value = RootState.Ready(p)
         if (first) startSession(p.id)

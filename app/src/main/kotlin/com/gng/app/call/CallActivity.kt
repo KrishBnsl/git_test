@@ -1,5 +1,11 @@
 package com.gng.app.call
 
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import android.util.Rational
+import android.content.res.Configuration
+import android.app.PictureInPictureParams
 import android.Manifest
 import android.app.Service
 import android.content.Context
@@ -24,6 +30,9 @@ import kotlinx.coroutines.launch
 
 /** Full-screen call UI. Shows over the lock screen for incoming calls. */
 class CallActivity : ComponentActivity() {
+    /** Shrunk to a floating picture-in-picture window. */
+    private var pip by mutableStateOf(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT >= 27) {
@@ -37,7 +46,9 @@ class CallActivity : ComponentActivity() {
         enableEdgeToEdge()
         handle(intent)
         setContent {
-            GngTheme(ThemeMode.Dark, dynamicColor = false) { CallScreen(container.calls, onClose = { finish() }) }
+            GngTheme(ThemeMode.Dark, com.gng.app.ui.theme.Accent.Default) {
+                CallScreen(container.calls, onClose = { finish() }, pip = pip, onMinimize = ::minimize)
+            }
         }
         // Close once the call is gone.
         lifecycleScope.launch {
@@ -45,6 +56,31 @@ class CallActivity : ComponentActivity() {
             container.calls.state.first { it == null }
             finish()
         }
+    }
+
+    /** The call carries on in the background: video calls float in a little window, voice calls just step aside. */
+    private fun minimize() {
+        if (!enterPip()) finish()
+    }
+
+    /** Leaving the app mid video call (Home, or another app) floats it instead of hiding it. */
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        enterPip()
+    }
+
+    private fun enterPip(): Boolean {
+        val s = container.calls.state.value ?: return false
+        val video = s.camOn || s.participants.any { it.camOn && it.video != null }
+        if (!video || s.phase != CallPhase.Active || Build.VERSION.SDK_INT < 26) return false
+        return runCatching {
+            enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(9, 16)).build())
+        }.getOrDefault(false)
+    }
+
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        pip = isInPictureInPictureMode
     }
 
     override fun onNewIntent(intent: Intent) {

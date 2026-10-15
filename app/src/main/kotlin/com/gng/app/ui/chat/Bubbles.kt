@@ -1,5 +1,9 @@
 package com.gng.app.ui.chat
 
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.LinkAnnotation
+import com.gng.app.ui.people.LocalOpenPerson
 import android.os.Build
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
@@ -113,6 +117,7 @@ fun MessageBubble(
 ) {
     val scheme = MaterialTheme.colorScheme
     val haptics = LocalHapticFeedback.current
+    val openPerson = LocalOpenPerson.current
     val palette = remember(scheme) { avatarColors(scheme) }
     val oneToOne = ctx.isDm
     val person = ctx.person(m.userId)
@@ -160,12 +165,16 @@ fun MessageBubble(
                     person.name,
                     style = MaterialTheme.typography.labelMedium,
                     color = nameColor(pickAvatarColor(palette, person.key).container, scheme.surface, scheme.onSurfaceVariant),
-                    modifier = Modifier.padding(start = 52.dp, bottom = 2.dp),
+                    modifier = Modifier.padding(start = 52.dp, bottom = 2.dp).clickable { m.userId?.let(openPerson) },
                 )
             }
             Row(verticalAlignment = Alignment.Bottom) {
                 if (!mine && !oneToOne) {
-                    if (run.last) Avatar(person.name, person.photoUrl, size = 32.dp, colorKey = person.key)
+                    if (run.last) {
+                        Box(Modifier.clip(CircleShape).clickable { m.userId?.let(openPerson) }) {
+                            Avatar(person.name, person.photoUrl, size = 32.dp, colorKey = person.key)
+                        }
+                    }
                     else Spacer(Modifier.width(32.dp))
                     Spacer(Modifier.width(8.dp))
                 }
@@ -313,7 +322,7 @@ private fun BubbleBody(
             val text = p.text?.takeIf { p.t == "text" || p.t == "legacy" || p.t == "image" }
             if (text != null) {
                 Text(
-                    withMentions(text, p.mentions, ctx, mine),
+                    withMentions(text, p.mentions, ctx, mine, everyone = p.all == true),
                     style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 22.sp),
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                 )
@@ -324,11 +333,19 @@ private fun BubbleBody(
 
 /** Highlights each "@Name" that really is a tag (not just someone typing an @). */
 @Composable
-private fun withMentions(text: String, mentions: List<String>?, ctx: GroupContext, mine: Boolean): AnnotatedString {
-    if (mentions.isNullOrEmpty()) return AnnotatedString(text)
+private fun withMentions(text: String, mentions: List<String>?, ctx: GroupContext, mine: Boolean, everyone: Boolean = false): AnnotatedString {
     val scheme = MaterialTheme.colorScheme
-    return remember(text, mentions, ctx.members, scheme) {
-        val spans = mentions.mapNotNull { id ->
+    val links = remember(text) { LINK.findAll(text).toList() }
+    if (mentions.isNullOrEmpty() && links.isEmpty()) return AnnotatedString(text)
+    val linkColor = if (mine) scheme.onPrimary else scheme.primary
+    return remember(text, mentions, ctx.members, scheme, everyone) {
+        val allSpans = if (everyone) {
+            generateSequence(text.indexOf("@$ALL_TAG")) { prev -> text.indexOf("@$ALL_TAG", prev + 1).takeIf { it >= 0 } }
+                .takeWhile { it >= 0 }.map { Triple(it, it + ALL_TAG.length + 1, true) }.toList()
+        } else {
+            emptyList()
+        }
+        val spans = allSpans + mentions.orEmpty().mapNotNull { id ->
             val name = ctx.members[id]?.displayName ?: return@mapNotNull null
             val needle = "@$name"
             generateSequence(text.indexOf(needle)) { prev -> text.indexOf(needle, prev + needle.length).takeIf { it >= 0 } }
@@ -338,6 +355,14 @@ private fun withMentions(text: String, mentions: List<String>?, ctx: GroupContex
         }.flatten().sortedBy { it.first }
         buildAnnotatedString {
             append(text)
+            // Links open in the browser.
+            links.forEach { match ->
+                val url = match.value.let { if (it.startsWith("http", ignoreCase = true)) it else "https://$it" }
+                addLink(
+                    LinkAnnotation.Url(url, TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline))),
+                    match.range.first, match.range.last + 1,
+                )
+            }
             spans.forEach { (start, end, isMe) ->
                 addStyle(
                     SpanStyle(
@@ -439,35 +464,86 @@ fun EventRow(m: ChatMessage, ctx: GroupContext, onOpen: (ChatMessage) -> Unit, o
         }
         return
     }
-    val joinable = m.kind == "call" && m.refId != null && "started" in body
+    if (m.kind == "call") {
+        CallPill(m, onJoinCall)
+        return
+    }
     val (icon, label) = when (m.kind) {
         "plan" -> GngIcons.EventFill to "New plan"
         "exam" -> GngIcons.HourglassTop to "Exam added"
-        "call" -> (if ("video" in body.lowercase()) GngIcons.Videocam else GngIcons.Call) to if (joinable) "Tap to join" else "Call"
         else -> GngIcons.Description to "New in the stack"
     }
     Surface(
-        onClick = { if (m.kind == "call") m.refId?.takeIf { joinable }?.let(onJoinCall) else onOpen(m) },
-        enabled = m.kind != "call" || joinable,
+        onClick = { onOpen(m) },
         shape = MaterialTheme.shapes.large,
-        color = scheme.tertiaryContainer,
-        contentColor = scheme.onTertiaryContainer,
-        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp, horizontal = 4.dp),
+        color = scheme.surfaceContainer,
+        border = BorderStroke(1.dp, scheme.outlineVariant),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp, horizontal = 28.dp),
     ) {
-        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            TonalIcon(icon, container = scheme.tertiary, content = scheme.onTertiary, size = 40.dp)
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            TonalIcon(icon, size = 36.dp)
             Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
                 Text(
-                    if (m.kind == "call") label else "$label · ${ctx.nameOf(m.userId)}",
+                    "$label · ${ctx.nameOf(m.userId)}",
                     style = MaterialTheme.typography.labelMedium,
-                    color = scheme.onTertiaryContainer.copy(alpha = 0.8f),
+                    color = scheme.onSurfaceVariant,
                 )
-                Text(body, style = MaterialTheme.typography.bodyMedium)
+                Text(body, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            if (m.kind != "call" || joinable) GngIcon(GngIcons.ChevronRight, null)
+            GngIcon(GngIcons.ChevronRight, null, tint = scheme.onSurfaceVariant)
         }
     }
 }
+
+/**
+ * One small centred line per call, updated in place: "Aman started a voice call · Join" while it's
+ * going, then "Voice call · 3 min" or "Missed voice call".
+ */
+@Composable
+private fun CallPill(m: ChatMessage, onJoinCall: (String) -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    val body = m.payload.text.orEmpty()
+    val ongoing = m.refId != null && "started" in body
+    val missed = body.startsWith("Missed")
+    val video = "video" in body.lowercase()
+    val time = m.createdAt.atZone(IST).format(TIME).lowercase()
+    Box(Modifier.fillMaxWidth().padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
+        Surface(
+            onClick = { m.refId?.takeIf { ongoing }?.let(onJoinCall) },
+            enabled = ongoing,
+            shape = CircleShape,
+            color = if (ongoing) CALL_PILL_GREEN.copy(alpha = 0.14f) else scheme.surfaceContainerHigh,
+        ) {
+            Row(Modifier.padding(horizontal = 14.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                GngIcon(
+                    when {
+                        missed -> GngIcons.CallMissed
+                        video -> GngIcons.Videocam
+                        else -> GngIcons.Call
+                    },
+                    null, size = 16.dp,
+                    tint = when {
+                        missed -> scheme.error
+                        ongoing -> CALL_PILL_GREEN
+                        else -> scheme.onSurfaceVariant
+                    },
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    if (ongoing) body else "$body · $time",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (missed) scheme.error else scheme.onSurfaceVariant,
+                )
+                if (ongoing) {
+                    Spacer(Modifier.width(10.dp))
+                    Text("Join", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = CALL_PILL_GREEN)
+                }
+            }
+        }
+    }
+}
+
+private val CALL_PILL_GREEN = Color(0xFF1FA855)
 
 @Composable
 fun DaySeparator(label: String) {
@@ -493,3 +569,6 @@ fun prettySize(bytes: Long): String = when {
 private fun nameColor(color: Color, background: Color, fallback: Color): Color =
     if (androidx.core.graphics.ColorUtils.calculateContrast(color.copy(alpha = 1f).toArgb(), background.copy(alpha = 1f).toArgb()) >= 3.0) color
     else fallback
+
+/** Web links in a message: http(s)://… or www.… */
+private val LINK = Regex("""(?i)\b(https?://|www\.)[^\s<>"]+[^\s<>".,;:!?)\]]""")

@@ -8,6 +8,7 @@ import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Columns
 import io.github.jan.supabase.postgrest.query.Order
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -154,8 +155,21 @@ class E2ee(context: Context, private val client: SupabaseClient, private val cac
         }
     }
 
-    /** The epoch to encrypt new messages with, starting a new one if membership or keys changed. */
-    suspend fun sendingKey(groupId: String, myId: String): EpochKey =
+    /**
+     * The epoch to encrypt new messages with, starting a new one if membership or keys changed.
+     *
+     * Fast path: with a key already in hand, sending never waits; if it hasn't been checked for a
+     * while, the check (a few queries) runs in the background and the next message uses its result.
+     */
+    suspend fun sendingKey(groupId: String, myId: String): EpochKey {
+        sendKeys[groupId]?.let { (checkedAt, key) ->
+            if (System.currentTimeMillis() - checkedAt > RECHECK_MS) background.launch { runCatching { recheck(groupId, myId) } }
+            return key
+        }
+        return recheck(groupId, myId)
+    }
+
+    private suspend fun recheck(groupId: String, myId: String): EpochKey =
         locks.getOrPut(groupId) { Mutex() }.withLock {
             sendKeys[groupId]?.let { (checkedAt, key) ->
                 if (System.currentTimeMillis() - checkedAt < RECHECK_MS) return@withLock key
@@ -163,6 +177,8 @@ class E2ee(context: Context, private val client: SupabaseClient, private val cac
             withContext(Dispatchers.IO) { resolveSendingKey(groupId, myId) }
                 .also { sendKeys[groupId] = System.currentTimeMillis() to it }
         }
+
+    private val background = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
 
     /** Forget the cached send key so the next send re-checks membership (call after joins/leaves). */
     fun invalidate(groupId: String) {

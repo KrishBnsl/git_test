@@ -151,4 +151,13 @@ object GngIcons {
     @DrawableRes val Error = R.drawable.ic_error
     @DrawableRes val QrCode = R.drawable.ic_qr_code
     @DrawableRes val QrCodeScanner = R.drawable.ic_qr_code_scanner
+    @DrawableRes val GroupAdd = R.drawable.ic_group_add
+    @DrawableRes val Bluetooth = R.drawable.ic_bluetooth
+    @DrawableRes val Headphones = R.drawable.ic_headphones
+    @DrawableRes val PhoneInTalk = R.drawable.ic_phone_in_talk
+    @DrawableRes val PictureInPictureAlt = R.drawable.ic_picture_in_picture_alt
+    @DrawableRes val CallMissed = R.drawable.ic_call_missed
+    @DrawableRes val AddCall = R.drawable.ic_add_call
+    @DrawableRes val PhoneCallback = R.drawable.ic_phone_callback
+    @DrawableRes val PersonSearch = R.drawable.ic_person_search
 }

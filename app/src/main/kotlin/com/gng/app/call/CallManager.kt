@@ -71,6 +71,9 @@ private const val TAG = "gng-call"
 
 enum class CallPhase { Ringing, Calling, Connecting, Active, Ended }
 
+/** Where the call's sound goes. */
+enum class AudioRoute(val label: String) { Earpiece("Phone"), Speaker("Speaker"), Bluetooth("Bluetooth"), Headset("Headset") }
+
 data class Participant(
     val userId: String,
     val video: VideoTrack? = null,
@@ -93,6 +96,9 @@ data class CallUi(
     val micOn: Boolean = true,
     val camOn: Boolean = true,
     val speakerOn: Boolean = false,
+    /** Current audio output, and what else is available (Bluetooth, wired headset…). */
+    val route: AudioRoute = AudioRoute.Earpiece,
+    val routes: List<AudioRoute> = listOf(AudioRoute.Earpiece, AudioRoute.Speaker),
     val connectedAt: Long? = null,
     val endedReason: String? = null,
 )
@@ -133,6 +139,19 @@ class CallManager(
     val state: StateFlow<CallUi?> = _state.asStateFlow()
     private val sounds = CallSounds(context)
 
+    /** Calls going on in my conversations, by conversation id, so the home list can offer "Join". */
+    private val _active = MutableStateFlow<Map<String, CallRow>>(emptyMap())
+    val activeCalls: StateFlow<Map<String, CallRow>> = _active.asStateFlow()
+
+    fun setActiveCalls(calls: List<CallRow>) {
+        _active.value = calls.filter { it.endedAt == null }.associateBy { it.groupId }
+    }
+
+    /** A call started or ended somewhere (from realtime or a push). */
+    fun onCallChanged(call: CallRow) {
+        _active.update { if (call.endedAt == null) it + (call.groupId to call) else it - call.groupId }
+    }
+
     init {
         scope.launch { _state.collect { sounds.update(it) } }
     }
@@ -170,6 +189,17 @@ class CallManager(
     private var ringing: CallRow? = null
     private var ringingIsDm = false
     private val seenCalls = mutableSetOf<String>()
+    /** Calls this phone actually talked in (not just rang), so their end isn't "missed". */
+    private val joinedCalls = mutableSetOf<String>()
+
+    fun wasInCall(callId: String) = callId in joinedCalls
+
+    /** First connection in this call: tell the server it was answered (so it isn't "Missed"). */
+    private fun markAnswered() {
+        val id = _state.value?.callId?.takeIf { it.isNotEmpty() } ?: return
+        if (!joinedCalls.add(id)) return
+        scope.launch { runCatching { client.postgrest.rpc("mark_call_answered", buildJsonObject { put("p_call", id) }) } }
+    }
     private val audio by lazy { context.getSystemService(AudioManager::class.java) }
 
     // --- starting, ringing, answering --------------------------------------------------
@@ -214,13 +244,14 @@ class CallManager(
         return true
     }
 
-    suspend fun accept() {
+    /** Picks up. [withVideo] false answers a video call with your camera off (you still see theirs). */
+    suspend fun accept(withVideo: Boolean = true) {
         val call = ringing ?: return
         val title = _state.value?.title ?: ""
         notifier.cancelCall(call.id)
         ringing = null
-        join(call, title, outgoing = false) // replaces the ringing state without passing through null
-
+        // Replaces the ringing state without passing through null.
+        join(if (withVideo) call else call.copy(video = false), title, outgoing = false)
     }
 
     suspend fun decline(callId: String) {
@@ -234,6 +265,7 @@ class CallManager(
 
     /** The server says the call is over (everyone left, or the caller gave up). */
     fun remoteEnded(callId: String) {
+        _active.update { calls -> calls.filterValues { it.id != callId } }
         notifier.cancelCall(callId)
         if (ringing?.id == callId) {
             ringing = null
@@ -297,7 +329,39 @@ class CallManager(
     fun toggleSpeaker() {
         val on = !(_state.value?.speakerOn ?: false)
         setSpeaker(on)
-        _state.update { it?.copy(speakerOn = on) }
+        refreshRoutes()
+    }
+
+    /** Sends the call's sound to [route] (speaker, earpiece, Bluetooth or a wired headset). */
+    fun setRoute(route: AudioRoute) {
+        if (Build.VERSION.SDK_INT >= 31) {
+            val device = audio.availableCommunicationDevices.firstOrNull { routeOf(it.type) == route }
+            if (device != null) audio.setCommunicationDevice(device)
+        } else {
+            @Suppress("DEPRECATION")
+            audio.isSpeakerphoneOn = route == AudioRoute.Speaker
+        }
+        refreshRoutes()
+    }
+
+    /** Re-reads which outputs exist and which is in use (call after any change, or when a headset connects). */
+    fun refreshRoutes() {
+        val (current, available) = if (Build.VERSION.SDK_INT >= 31) {
+            val devices = audio.availableCommunicationDevices.mapNotNull { routeOf(it.type) }.distinct()
+            (audio.communicationDevice?.type?.let(::routeOf) ?: AudioRoute.Earpiece) to devices
+        } else {
+            @Suppress("DEPRECATION")
+            (if (audio.isSpeakerphoneOn) AudioRoute.Speaker else AudioRoute.Earpiece) to listOf(AudioRoute.Earpiece, AudioRoute.Speaker)
+        }
+        _state.update { it?.copy(route = current, routes = available.ifEmpty { listOf(AudioRoute.Earpiece, AudioRoute.Speaker) }, speakerOn = current == AudioRoute.Speaker) }
+    }
+
+    private fun routeOf(type: Int): AudioRoute? = when (type) {
+        AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> AudioRoute.Earpiece
+        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> AudioRoute.Speaker
+        AudioDeviceInfo.TYPE_BLUETOOTH_SCO, AudioDeviceInfo.TYPE_BLE_HEADSET -> AudioRoute.Bluetooth
+        AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_WIRED_HEADPHONES, AudioDeviceInfo.TYPE_USB_HEADSET -> AudioRoute.Headset
+        else -> null
     }
 
     suspend fun hangUp() = leave(endForEveryone = null, reason = null)
@@ -306,6 +370,7 @@ class CallManager(
 
     private suspend fun join(call: CallRow, title: String, outgoing: Boolean) {
         seenCalls += call.id
+        onCallChanged(call)
         try {
             connect(call, title, outgoing)
         } catch (e: Exception) {
@@ -322,6 +387,7 @@ class CallManager(
             camOn = call.video, speakerOn = call.video,
         )
         startAudio(speaker = call.video)
+        refreshRoutes()
         withContext(Dispatchers.Default) { createLocalTracks(call.video) }
         _state.update { it?.copy(localVideo = videoTrack, camOn = videoTrack != null) }
         CallService.start(context)
@@ -589,6 +655,7 @@ class CallManager(
                 scope.launch {
                     when (newState) {
                         PeerConnection.PeerConnectionState.CONNECTED -> {
+                            markAnswered()
                             upsertParticipant(userId) { it.copy(connected = true, reconnecting = false) }
                             _state.update { it?.copy(phase = CallPhase.Active, connectedAt = it.connectedAt ?: System.currentTimeMillis()) }
                             peerLock.withLock { iceRestarts.remove(userId) }

@@ -1,5 +1,43 @@
 package com.gng.app.ui.groups
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.core.content.ContextCompat
+import com.gng.app.call.CallActivity
+import com.gng.app.call.CallPhase
+import com.gng.app.call.CallUi
+import com.gng.app.container
+import com.gng.app.data.parseInstant
+import com.gng.app.ui.dm.inboxTime
+import kotlinx.coroutines.flow.first
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -10,7 +48,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -42,7 +79,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.gng.app.container
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -50,10 +86,8 @@ import androidx.lifecycle.viewModelScope
 import com.gng.app.data.Group
 import com.gng.app.AppContainer
 import com.gng.app.data.Conversation
-import com.gng.app.data.parseInstant
 import com.gng.app.ui.components.Avatar
 import com.gng.app.ui.dm.NewMessageSheet
-import com.gng.app.ui.dm.inboxTime
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.Lifecycle
@@ -81,7 +115,6 @@ import com.gng.app.update.UpdateState
 import com.gng.core.InviteCodes
 import com.gng.app.ui.invite.scanInvite
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.material3.FilledTonalButton
 import kotlinx.coroutines.launch
 
 /** One line of the home list: a gang or a DM, with what to show for it. */
@@ -108,10 +141,23 @@ class GroupsViewModel(private val c: AppContainer, private val me: Profile) : Vi
 
     private val profileCache = mutableMapOf<String, Profile>()
     private val markedDelivered = mutableMapOf<String, Long>()
+    /** Chats pinned to the top (kept on this phone). */
+    var pinned by mutableStateOf<Set<String>>(emptySet())
+        private set
+    /** The server has answered at least once, so an empty list really means "no chats". */
+    var loaded by mutableStateOf(false)
+        private set
+    private var latest: List<Conversation> = emptyList()
 
     init {
         viewModelScope.launch {
-            c.chat.cachedConversations()?.let { rows = build(it) }
+            pinned = c.chat.pinned()
+            // What's on the phone first, without touching the network, so the list is there instantly.
+            c.chat.cachedConversations()?.let { cached ->
+                latest = cached
+                rows = build(cached)
+                if (cached.isNotEmpty()) loaded = true
+            }
             refresh()
         }
         // Keep the list live: a new message anywhere refreshes order, previews and badges.
@@ -130,7 +176,9 @@ class GroupsViewModel(private val c: AppContainer, private val me: Profile) : Vi
         refreshing = rows == null
         runCatching { c.chat.conversations() }
             .onSuccess { list ->
+                latest = list
                 rows = build(list)
+                loaded = true
                 error = null
                 // These are on the phone now, so senders can see "Delivered".
                 list.forEach { conv ->
@@ -140,21 +188,58 @@ class GroupsViewModel(private val c: AppContainer, private val me: Profile) : Vi
                         launch { runCatching { c.chat.markSeen(conv.id, last, null) } }
                     }
                 }
+                fetchMissingPeople(list)
             }
-            .onFailure { error = it.friendly(); if (rows == null) rows = emptyList() }
+            // Offline: keep showing what we have. Only a first-ever start with nothing saved shows the error.
+            .onFailure { error = it.friendly() }
         refreshing = false
     }
 
+    /** Builds rows from what's on the phone only (never waits on the network). */
     private suspend fun build(list: List<Conversation>): List<ConversationRow> = list.map { conv ->
         val members = c.chat.cachedMembers(conv.id).orEmpty().associate { it.userId to it.profiles }
         val other = conv.otherUserId?.takeIf { conv.isDm }?.let { id ->
-            members[id] ?: profileCache[id]
-                ?: runCatching { c.profiles.get(id) }.getOrNull()?.also { profileCache[id] = it }
-                // Message requests: their full profile is private until accepted, but the card comes with the members.
-                ?: runCatching { c.groups.members(conv.id) }.getOrNull()?.firstOrNull { it.userId == id }?.profiles
-                    ?.also { profileCache[id] = it }
+            members[id] ?: profileCache[id] ?: c.chat.cachedProfile(id)?.also { profileCache[id] = it }
         }
         ConversationRow(conv, if (conv.isDm) other?.displayName ?: "Direct message" else conv.name, preview(conv, members), other)
+    }
+
+    /** DM partners we've never seen: look them up once, save them, and redraw. */
+    private fun fetchMissingPeople(list: List<Conversation>) = viewModelScope.launch {
+        val missing = list.filter { it.isDm }.mapNotNull { conv -> conv.otherUserId?.let { conv to it } }
+            .filter { (_, id) -> profileCache[id] == null && c.chat.cachedProfile(id) == null }
+        if (missing.isEmpty()) return@launch
+        missing.forEach { (conv, id) ->
+            val p = runCatching { c.profiles.get(id) }.getOrNull()
+                // Message requests: their full profile is private until accepted, but the card comes with the members.
+                ?: runCatching { c.groups.members(conv.id) }.getOrNull()?.firstOrNull { it.userId == id }?.profiles
+            p?.let { profileCache[id] = it; c.chat.rememberProfile(it) }
+        }
+        rows = build(latest)
+    }
+
+    fun togglePin(row: ConversationRow) = viewModelScope.launch {
+        val id = row.conversation.id
+        c.chat.setPinned(id, id !in pinned)
+        pinned = c.chat.pinned()
+    }
+
+    fun toggleMute(row: ConversationRow) = viewModelScope.launch {
+        val until = if (row.conversation.isMuted) null else java.time.Instant.now().plus(java.time.Duration.ofDays(3650))
+        runCatching { c.chat.mute(row.conversation.id, me.id, until) }.onSuccess { refresh() }.onFailure { error = it.friendly() }
+    }
+
+    fun markRead(row: ConversationRow) = viewModelScope.launch {
+        val last = row.conversation.lastMessageId ?: return@launch
+        runCatching { c.chat.markSeen(row.conversation.id, last, if (c.settings.readReceipts.first()) last else null) }
+        c.notifier.clearConversation(row.conversation.id)
+        refresh()
+    }
+
+    fun joinCall(row: ConversationRow, onCallScreen: () -> Unit) = viewModelScope.launch {
+        val call = c.calls.activeCalls.value[row.conversation.id] ?: return@launch
+        onCallScreen()
+        runCatching { c.calls.joinExisting(call, row.title) }.onFailure { error = it.friendly() }
     }
 
     private suspend fun preview(conv: Conversation, members: Map<String, Profile>): String {
@@ -198,22 +283,57 @@ class GroupsViewModel(private val c: AppContainer, private val me: Profile) : Vi
 @Composable
 fun GroupsScreen(me: Profile, onOpen: (Group) -> Unit, onSettings: () -> Unit, onJoinCode: (String) -> Unit = {}) {
     val context = LocalContext.current
+    val c = context.container
     val scope = rememberCoroutineScope()
     val vm = gngViewModel { GroupsViewModel(it, me) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.refresh() }
     var sheet by remember { mutableStateOf<GangSheetMode?>(null) }
     var picker by remember { mutableStateOf(false) }
-
-    val updates = LocalContext.current.container.updates
+    val updates = c.updates
     val updateState by updates.state.collectAsStateWithLifecycle()
+    val activeCalls by c.calls.activeCalls.collectAsStateWithLifecycle()
+    val ongoing by c.calls.state.collectAsStateWithLifecycle()
+
+    // Joining a call from the list needs the mic first.
+    var joining by remember { mutableStateOf<ConversationRow?>(null) }
+    fun openCall(id: String) = context.startActivity(CallActivity.intent(context, id, CallActivity.ACTION_SHOW))
+    val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        val row = joining
+        if (ok && row != null) vm.joinCall(row) { openCall(activeCalls[row.conversation.id]?.id.orEmpty()) }
+        else if (!ok) vm.showError("Calls need the microphone")
+    }
+
     val all = vm.rows
     GroupsContent(
-        updateState = updateState, updateActions = updates.actions(),
-        me = me, rows = all?.filterNot { it.conversation.isRequestFor(me.id) },
-        requests = all.orEmpty().filter { it.conversation.isRequestFor(me.id) }, refreshing = vm.refreshing, error = vm.error, onDismissError = vm::dismissError,
+        me = me,
+        rows = all?.filterNot { it.conversation.isRequestFor(me.id) },
+        refreshing = vm.refreshing, error = vm.error, onDismissError = vm::dismissError,
         onRefresh = { vm.refresh() }, onOpen = { onOpen(it.conversation.toGroup()) }, onSettings = onSettings,
         onNewMessage = { vm.loadPeople(); picker = true },
         onStart = { sheet = GangSheetMode.Start }, onJoin = { sheet = GangSheetMode.Join },
+        updateState = updateState, updateActions = updates.actions(),
+        requests = all.orEmpty().filter { it.conversation.isRequestFor(me.id) },
+        loaded = vm.loaded,
+        pinned = vm.pinned,
+        activeCalls = activeCalls.keys,
+        ongoing = ongoing?.takeIf { it.phase != CallPhase.Ended && it.phase != CallPhase.Ringing },
+        onReturnToCall = { ongoing?.let { openCall(it.callId) } },
+        onJoinCall = { row ->
+            joining = row
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                vm.joinCall(row) { openCall(activeCalls[row.conversation.id]?.id.orEmpty()) }
+            } else {
+                askMic.launch(Manifest.permission.RECORD_AUDIO)
+            }
+        },
+        onPin = vm::togglePin, onMute = vm::toggleMute, onMarkRead = vm::markRead,
+        onScan = {
+            scope.launch {
+                runCatching { scanInvite(context) }
+                    .onSuccess { code -> code?.let(onJoinCode) }
+                    .onFailure { vm.showError(it.message ?: "Couldn't scan that") }
+            }
+        },
     )
 
     sheet?.let { mode ->
@@ -243,7 +363,14 @@ fun GroupsScreen(me: Profile, onOpen: (Group) -> Unit, onSettings: () -> Unit, o
 
 enum class GangSheetMode { Start, Join }
 
-@OptIn(ExperimentalMaterial3Api::class)
+/** Which chats the home list shows. */
+private enum class ChatFilter(val label: String) { All("All"), Unread("Unread"), Gangs("Gangs"), Dms("DMs") }
+
+/**
+ * The home list, WhatsApp style: a plain top bar (it doesn't jump or collapse), search, filter
+ * chips, and flat rows. Pinned chats first; a bar to get back to a call you're in.
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun GroupsContent(
     me: Profile,
@@ -261,165 +388,306 @@ fun GroupsContent(
     updateActions: UpdateActions = UpdateActions(),
     /** DMs from people you don't share a gang with, waiting for you to accept. */
     requests: List<ConversationRow> = emptyList(),
+    loaded: Boolean = true,
+    pinned: Set<String> = emptySet(),
+    /** Conversations with a call going on right now. */
+    activeCalls: Set<String> = emptySet(),
+    /** The call you're in, if any. */
+    ongoing: CallUi? = null,
+    onReturnToCall: () -> Unit = {},
+    onJoinCall: (ConversationRow) -> Unit = {},
+    onPin: (ConversationRow) -> Unit = {},
+    onMute: (ConversationRow) -> Unit = {},
+    onMarkRead: (ConversationRow) -> Unit = {},
+    onScan: () -> Unit = {},
 ) {
-    var showRequests by rememberSaveable { mutableStateOf(false) }
-    val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val scheme = MaterialTheme.colorScheme
     val snackbar = remember { SnackbarHostState() }
-    // Sheet errors show inside the sheet; list errors show as a snackbar.
-    LaunchedEffect(error, rows) {
-        if (error != null && rows != null && rows.isEmpty()) {
+    var showRequests by rememberSaveable { mutableStateOf(false) }
+    var searching by rememberSaveable { mutableStateOf(false) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var filter by rememberSaveable { mutableStateOf(ChatFilter.All) }
+    var newMenu by remember { mutableStateOf(false) }
+    var menuFor by remember { mutableStateOf<ConversationRow?>(null) }
+    LaunchedEffect(error) {
+        if (error != null && rows != null) {
             snackbar.showSnackbar(error)
             onDismissError()
         }
     }
+    BackHandler(enabled = searching) { searching = false; query = "" }
+
+    val shown = remember(rows, query, filter, pinned) {
+        rows.orEmpty()
+            .filter { r -> query.isBlank() || r.title.contains(query.trim(), ignoreCase = true) }
+            .filter { r ->
+                when (filter) {
+                    ChatFilter.All -> true
+                    ChatFilter.Unread -> r.conversation.unreadCount > 0
+                    ChatFilter.Gangs -> !r.conversation.isDm
+                    ChatFilter.Dms -> r.conversation.isDm
+                }
+            }
+            .sortedByDescending { it.conversation.id in pinned } // stable: keeps recency order within each part
+    }
 
     Scaffold(
-        modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
-            LargeTopAppBar(
-                title = { Text("Hey, ${me.displayName.substringBefore(' ')}") },
-                actions = {
-                    IconButton(onClick = onNewMessage) { GngIcon(GngIcons.AddComment, "New message") }
-                    IconButton(onClick = onSettings) { Avatar(me.displayName, me.avatarUrl, size = 36.dp, colorKey = me.id) }
+            TopAppBar(
+                title = {
+                    if (searching) {
+                        val focus = remember { FocusRequester() }
+                        LaunchedEffect(Unit) { focus.requestFocus() }
+                        TextField(
+                            query, { query = it }, placeholder = { Text("Search chats") }, singleLine = true,
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
+                                focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent,
+                            ),
+                            modifier = Modifier.fillMaxWidth().focusRequester(focus),
+                        )
+                    } else {
+                        Text("gng", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold, color = scheme.primary)
+                    }
                 },
-                scrollBehavior = scroll,
+                navigationIcon = {
+                    if (searching) IconButton(onClick = { searching = false; query = "" }) { GngIcon(GngIcons.ArrowBack, "Close search") }
+                },
+                actions = {
+                    if (!searching) {
+                        IconButton(onClick = onScan) { GngIcon(GngIcons.QrCodeScanner, "Scan a gang's QR code") }
+                        IconButton(onClick = { searching = true }) { GngIcon(GngIcons.Search, "Search") }
+                        IconButton(onClick = onSettings) { Avatar(me.displayName, me.avatarUrl, size = 32.dp, colorKey = me.id) }
+                    }
+                },
             )
         },
         floatingActionButton = {
-            if (!rows.isNullOrEmpty()) {
-                ExtendedFloatingActionButton(
-                    onClick = onStart,
-                    icon = { GngIcon(GngIcons.Add, null) },
-                    text = { Text("New gang") },
-                )
+            Box {
+                FloatingActionButton(onClick = { newMenu = true }) { GngIcon(GngIcons.AddComment, "New chat") }
+                DropdownMenu(newMenu, onDismissRequest = { newMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("New message") }, leadingIcon = { GngIcon(GngIcons.ChatBubble, null) },
+                        onClick = { newMenu = false; onNewMessage() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("New gang") }, leadingIcon = { GngIcon(GngIcons.GroupAdd, null) },
+                        onClick = { newMenu = false; onStart() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Join a gang") }, leadingIcon = { GngIcon(GngIcons.QrCodeScanner, null) },
+                        onClick = { newMenu = false; onJoin() },
+                    )
+                }
             }
         },
     ) { padding ->
-        Column(Modifier.padding(padding)) {
-        UpdateCard(updateState, updateActions, Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
-        PullToRefreshBox(isRefreshing = refreshing, onRefresh = onRefresh, modifier = Modifier.weight(1f)) {
-            when {
-                rows == null -> Loading()
-                rows.isEmpty() && requests.isEmpty() -> Column(
-                    Modifier.fillMaxSize(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
+        Column(Modifier.padding(padding).fillMaxSize()) {
+            ongoing?.let { OngoingCallBar(it, onReturnToCall) }
+            UpdateCard(updateState, updateActions, Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+            if (rows != null && rows.isNotEmpty() && !searching) {
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    EmptyState(
-                        GngIcons.Groups, "No gangs yet",
-                        "Start one and share the code in your WhatsApp group, or join a friend's.",
-                        action = {
-                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Button(onClick = onStart) { Text("Start a gang") }
-                                OutlinedButton(onClick = onJoin) { Text("Join with code") }
-                            }
-                        },
-                    )
-                }
-                else -> LazyColumn(
-                    Modifier.fillMaxSize().padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    if (requests.isNotEmpty()) {
-                        item(key = "requests") {
-                            RequestsHeader(requests.size, showRequests) { showRequests = !showRequests }
-                        }
-                        if (showRequests) {
-                            items(requests, key = { "r" + it.conversation.id }) { row -> ConversationCard(row, onClick = { onOpen(row) }) }
-                        }
+                    items(ChatFilter.entries) { f ->
+                        val count = if (f == ChatFilter.Unread) rows.count { it.conversation.unreadCount > 0 } else 0
+                        FilterChip(
+                            selected = filter == f, onClick = { filter = f },
+                            label = { Text(if (count > 0) "${f.label} $count" else f.label) },
+                            shape = CircleShape,
+                        )
                     }
-                    items(rows, key = { it.conversation.id }) { row -> ConversationCard(row, onClick = { onOpen(row) }) }
-                    item {
-                        OutlinedButton(onClick = onJoin, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
-                            GngIcon(GngIcons.Key, null, size = 18.dp)
-                            Spacer(Modifier.width(8.dp))
-                            Text("Join with a code")
+                }
+            }
+            PullToRefreshBox(isRefreshing = refreshing, onRefresh = onRefresh, modifier = Modifier.weight(1f)) {
+                when {
+                    rows == null || (!loaded && rows.isEmpty() && error == null) -> Loading()
+                    rows.isEmpty() && requests.isEmpty() && error != null -> Column(
+                        Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
+                    ) {
+                        EmptyState(
+                            GngIcons.WifiOff, "Can't reach the gang", "Check your internet and try again.",
+                            action = { Button(onClick = onRefresh) { Text("Retry") } },
+                        )
+                    }
+                    rows.isEmpty() && requests.isEmpty() -> Column(
+                        Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
+                    ) {
+                        EmptyState(
+                            GngIcons.Groups, "No chats yet",
+                            "Start a gang and share its QR code, scan a friend's, or message anyone by their @username.",
+                            action = {
+                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    Button(onClick = onStart) { Text("Start a gang") }
+                                    OutlinedButton(onClick = onJoin) { Text("Join one") }
+                                }
+                            },
+                        )
+                    }
+                    else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 96.dp)) {
+                        if (requests.isNotEmpty() && !searching) {
+                            item(key = "requests") { RequestsHeader(requests.size, showRequests) { showRequests = !showRequests } }
+                            if (showRequests) {
+                                items(requests, key = { "r" + it.conversation.id }) { row ->
+                                    ConversationRowItem(row, pinned = false, inCall = false, onClick = { onOpen(row) }, onLongClick = {}, onJoinCall = {})
+                                }
+                            }
                         }
-                        Spacer(Modifier.height(96.dp)) // room for the FAB
+                        if (shown.isEmpty()) {
+                            item {
+                                Text(
+                                    if (query.isNotBlank()) "No chats match \"$query\"" else "Nothing here",
+                                    color = scheme.onSurfaceVariant, modifier = Modifier.fillMaxWidth().padding(32.dp),
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                )
+                            }
+                        }
+                        items(shown, key = { it.conversation.id }) { row ->
+                            Box(Modifier.animateItem()) {
+                                ConversationRowItem(
+                                    row, pinned = row.conversation.id in pinned, inCall = row.conversation.id in activeCalls,
+                                    onClick = { onOpen(row) }, onLongClick = { menuFor = row }, onJoinCall = { onJoinCall(row) },
+                                )
+                                DropdownMenu(menuFor == row, onDismissRequest = { menuFor = null }) {
+                                    DropdownMenuItem(
+                                        text = { Text(if (row.conversation.id in pinned) "Unpin" else "Pin to top") },
+                                        leadingIcon = { GngIcon(GngIcons.PushPin, null) },
+                                        onClick = { menuFor = null; onPin(row) },
+                                    )
+                                    if (row.conversation.unreadCount > 0) {
+                                        DropdownMenuItem(
+                                            text = { Text("Mark as read") }, leadingIcon = { GngIcon(GngIcons.DoneAll, null) },
+                                            onClick = { menuFor = null; onMarkRead(row) },
+                                        )
+                                    }
+                                    DropdownMenuItem(
+                                        text = { Text(if (row.conversation.isMuted) "Unmute" else "Mute") },
+                                        leadingIcon = { GngIcon(if (row.conversation.isMuted) GngIcons.Notifications else GngIcons.NotificationsOff, null) },
+                                        onClick = { menuFor = null; onMute(row) },
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+/** "On a call with Hostel H4 · 03:12 · tap to return", across the top of the home list. */
+@Composable
+fun OngoingCallBar(call: CallUi, onClick: () -> Unit) {
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(call.connectedAt) {
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(1000)
+        }
+    }
+    val secs = call.connectedAt?.let { ((now - it) / 1000).coerceAtLeast(0) }
+    Surface(onClick = onClick, color = CALL_GREEN, contentColor = Color.White, modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            GngIcon(if (call.video) GngIcons.Videocam else GngIcons.Call, null, tint = Color.White, size = 20.dp)
+            Spacer(Modifier.width(12.dp))
+            Text(
+                "On a call · ${call.title}" + (secs?.let { " · %d:%02d".format(it / 60, it % 60) } ?: ""),
+                style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+            )
+            Text("Return", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
         }
     }
 }
+
+val CALL_GREEN = Color(0xFF1FA855)
 
 @Composable
 private fun RequestsHeader(count: Int, open: Boolean, onClick: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
-    Card(
-        onClick = onClick,
-        colors = CardDefaults.cardColors(containerColor = scheme.secondaryContainer),
-        shape = MaterialTheme.shapes.large,
-        modifier = Modifier.fillMaxWidth(),
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(52.dp).clip(CircleShape).background(scheme.secondaryContainer), contentAlignment = Alignment.Center) {
             GngIcon(GngIcons.Mail, null, tint = scheme.onSecondaryContainer)
-            Column(Modifier.padding(horizontal = 16.dp).weight(1f)) {
-                Text("Message requests", style = MaterialTheme.typography.titleMedium, color = scheme.onSecondaryContainer)
-                Text(
-                    "$count ${if (count == 1) "person wants" else "people want"} to message you",
-                    style = MaterialTheme.typography.bodySmall, color = scheme.onSecondaryContainer,
-                )
-            }
-            GngIcon(if (open) GngIcons.ExpandMore else GngIcons.ChevronRight, null, tint = scheme.onSecondaryContainer)
         }
+        Column(Modifier.padding(horizontal = 16.dp).weight(1f)) {
+            Text("Message requests", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "$count ${if (count == 1) "person wants" else "people want"} to message you",
+                style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant,
+            )
+        }
+        GngIcon(if (open) GngIcons.ExpandMore else GngIcons.ChevronRight, null, tint = scheme.onSurfaceVariant)
     }
 }
 
+/** One chat in the list: avatar, name, last message, time, unread count. Flat, like WhatsApp. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ConversationCard(row: ConversationRow, onClick: () -> Unit) {
+private fun ConversationRowItem(
+    row: ConversationRow,
+    pinned: Boolean,
+    inCall: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    onJoinCall: () -> Unit,
+) {
     val scheme = MaterialTheme.colorScheme
     val conv = row.conversation
     val unread = conv.unreadCount > 0
-    Card(
-        onClick = onClick,
-        colors = CardDefaults.cardColors(containerColor = scheme.surfaceContainer),
-        shape = MaterialTheme.shapes.large,
-        modifier = Modifier.fillMaxWidth(),
+    Row(
+        Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (conv.isDm) Avatar(row.title, row.other?.avatarUrl, size = 56.dp, colorKey = conv.otherUserId ?: conv.id)
-            else GroupAvatar(conv.emoji, conv.photoUrl, size = 56.dp)
-            Column(Modifier.padding(horizontal = 16.dp).weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        row.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        fontWeight = if (unread) FontWeight.ExtraBold else null, modifier = Modifier.weight(1f, fill = false),
-                    )
-                    if (conv.isMuted) {
-                        Spacer(Modifier.width(6.dp))
-                        GngIcon(GngIcons.NotificationsOff, "Muted", size = 16.dp, tint = scheme.onSurfaceVariant)
-                    }
-                }
-                Spacer(Modifier.height(4.dp))
+        if (conv.isDm) Avatar(row.title, row.other?.avatarUrl, size = 54.dp, colorKey = conv.otherUserId ?: conv.id)
+        else GroupAvatar(conv.emoji, conv.photoUrl, size = 54.dp, colorKey = conv.id)
+        Column(Modifier.padding(start = 14.dp).weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    row.preview,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (unread) scheme.onSurface else scheme.onSurfaceVariant,
-                    fontWeight = if (unread) FontWeight.SemiBold else null,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    row.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    fontWeight = if (unread) FontWeight.ExtraBold else FontWeight.SemiBold, modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    conv.lastMessageAt?.let { inboxTime(parseInstant(it)) }.orEmpty(),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (unread && !conv.isMuted) scheme.primary else scheme.onSurfaceVariant,
                 )
             }
-            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                conv.lastMessageAt?.let {
-                    Text(
-                        inboxTime(parseInstant(it)), style = MaterialTheme.typography.labelSmall,
-                        color = if (unread) scheme.primary else scheme.onSurfaceVariant,
-                    )
+            Spacer(Modifier.height(2.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    row.preview, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    color = if (unread) scheme.onSurface else scheme.onSurfaceVariant, modifier = Modifier.weight(1f),
+                )
+                if (conv.isMuted) GngIcon(GngIcons.NotificationsOff, "Muted", size = 16.dp, tint = scheme.onSurfaceVariant, modifier = Modifier.padding(start = 6.dp))
+                if (pinned) GngIcon(GngIcons.PushPinFill, "Pinned", size = 16.dp, tint = scheme.onSurfaceVariant, modifier = Modifier.padding(start = 6.dp))
+                if (conv.unreadMentions > 0) {
+                    Badge(containerColor = scheme.primary, modifier = Modifier.padding(start = 6.dp)) { Text("@") }
                 }
                 if (unread) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        // Someone tagged you here: always shown, even when the chat is muted.
-                        if (conv.unreadMentions > 0) Badge(containerColor = scheme.primary) { Text("@") }
-                        Badge(containerColor = if (conv.isMuted) scheme.outline else scheme.primary) {
-                            Text(if (conv.unreadCount > 99) "99+" else conv.unreadCount.toString())
-                        }
-                    }
-                } else {
-                    Spacer(Modifier.height(16.dp))
+                    Badge(
+                        containerColor = if (conv.isMuted) scheme.outline else scheme.primary,
+                        contentColor = if (conv.isMuted) scheme.surface else scheme.onPrimary,
+                        modifier = Modifier.padding(start = 6.dp),
+                    ) { Text(if (conv.unreadCount > 99) "99+" else conv.unreadCount.toString(), modifier = Modifier.padding(horizontal = 2.dp)) }
                 }
+            }
+        }
+        if (inCall) {
+            Spacer(Modifier.width(10.dp))
+            FilledTonalButton(
+                onClick = onJoinCall,
+                colors = ButtonDefaults.filledTonalButtonColors(containerColor = CALL_GREEN, contentColor = Color.White),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+            ) {
+                GngIcon(GngIcons.Call, null, size = 16.dp, tint = Color.White)
+                Spacer(Modifier.width(4.dp))
+                Text("Join")
             }
         }
     }

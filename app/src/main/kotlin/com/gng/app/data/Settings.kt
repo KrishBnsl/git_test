@@ -27,6 +27,7 @@ private val Context.dataStore by preferencesDataStore("gng_settings")
 class SettingsStore(private val context: Context) {
     private val themeKey = stringPreferencesKey("theme")
     private val dynamicColorKey = booleanPreferencesKey("dynamic_color")
+    private val accentKey = stringPreferencesKey("accent")
     private val lastUpdateCheckKey = longPreferencesKey("last_update_check")
     private val skippedVersionKey = stringPreferencesKey("skipped_update_version")
     private val sharingKey = stringPreferencesKey("sharing")
@@ -59,6 +60,10 @@ class SettingsStore(private val context: Context) {
 
     /** Use wallpaper colours on Android 12+. On by default; the brand palette is the alternative. */
     val dynamicColor: Flow<Boolean> = context.dataStore.data.map { it[dynamicColorKey] ?: true }
+
+    /** The theme colour (a [com.gng.app.ui.theme.Accent] name). Blue unless picked. */
+    val accent: Flow<String?> = context.dataStore.data.map { it[accentKey] }
+    suspend fun setAccent(name: String) = context.dataStore.edit { it[accentKey] = name }
 
     val sharing: Flow<SharingState> = context.dataStore.data.map { prefs ->
         SharingState(

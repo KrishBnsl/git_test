@@ -131,6 +131,8 @@ dependencies {
     implementation(libs.mlkit.subject.segmentation)
     // Invite QR codes: drawing them, and scanning them with Google's scanner (no camera permission needed).
     implementation(libs.zxing.core)
+    // Colour schemes from an accent colour (the theme picker).
+    implementation(libs.material.kolor)
     implementation(libs.play.services.code.scanner)
     implementation(libs.osmdroid)
 
