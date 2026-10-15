@@ -10,14 +10,15 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
 /**
  * Finds, downloads and installs new versions of gng from GitHub Releases.
  *
- * Android never lets an app update itself silently outside the Play Store, so the last step is always
- * the system's own install screen. Everything before that is automatic.
+ * With "Update automatically" on (the default), [AutoUpdate] does all of this in the background and
+ * this class only serves the Settings card ("Check" by hand, or auto-update switched off).
  */
 class UpdateManager(
     private val context: Context,
@@ -34,13 +35,19 @@ class UpdateManager(
 
     init {
         // Anything left from an earlier update has done its job.
-        if (enabled) installer.clearOldDownloads()
+        if (enabled) installer.clearOldDownloads(currentVersion)
     }
 
     /** On app start: look for an update, but not more than every few hours. */
     fun checkIfDue() {
         if (!enabled) return
         scope.launch {
+            if (settings.autoUpdate.first()) {
+                // Automatic: make sure the background check is scheduled, and run one now if it's been a while.
+                AutoUpdate.schedule(context, enabled = true)
+                if (System.currentTimeMillis() - settings.lastUpdateCheck() > CHECK_EVERY_MS) AutoUpdate.runNow(context)
+                return@launch
+            }
             val age = System.currentTimeMillis() - settings.lastUpdateCheck()
             if (age > CHECK_EVERY_MS) check(userInitiated = false)
         }
@@ -101,7 +108,7 @@ class UpdateManager(
             return
         }
         try {
-            installer.install(file)
+            installer.installInBackground(file)
         } catch (e: Exception) {
             _state.value = UpdateState.Failed("Couldn't open the installer.", info)
         }

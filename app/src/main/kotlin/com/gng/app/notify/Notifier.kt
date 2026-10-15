@@ -42,6 +42,11 @@ class Notifier(private val context: Context) {
             )
             nm.deleteNotificationChannel("calls") // the old, noisy channel from 0.4.0
             nm.createNotificationChannel(NotificationChannel(CH_ONGOING, "Ongoing call", NotificationManager.IMPORTANCE_LOW))
+            nm.createNotificationChannel(
+                NotificationChannel(CH_UPDATES, "App updates", NotificationManager.IMPORTANCE_LOW).apply {
+                    description = "When gng updates itself, or needs a tap to finish"
+                },
+            )
         }
     }
 
@@ -256,6 +261,47 @@ class Notifier(private val context: Context) {
             .build()
     }
 
+    // --- updates ------------------------------------------------------------------
+
+    /** Android wants a tap to install this update (the first one, or on older Android). */
+    @SuppressLint("MissingPermission")
+    fun showUpdateReady(install: PendingIntent) {
+        if (!canPost()) return
+        manager.notify(
+            UPDATE_ID,
+            NotificationCompat.Builder(context, CH_UPDATES)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle("gng update ready")
+                .setContentText("Tap to install. Later updates install by themselves.")
+                .setContentIntent(install)
+                .setAutoCancel(true)
+                .build(),
+        )
+    }
+
+    fun cancelUpdateReady() = manager.cancel(UPDATE_ID)
+
+    @SuppressLint("MissingPermission")
+    fun showUpdated(version: String) {
+        if (!canPost()) return
+        manager.notify(
+            UPDATE_ID,
+            NotificationCompat.Builder(context, CH_UPDATES)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle("gng updated to $version")
+                .setContentText("Tap to see what's new")
+                .setContentIntent(
+                    PendingIntent.getActivity(
+                        context, UPDATE_ID, Intent(context, MainActivity::class.java),
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                    ),
+                )
+                .setTimeoutAfter(6 * 60 * 60 * 1000L)
+                .setAutoCancel(true)
+                .build(),
+        )
+    }
+
     // --- intents -------------------------------------------------------------------
 
     private fun openChat(groupId: String, requestCode: Int): PendingIntent = PendingIntent.getActivity(
@@ -279,6 +325,8 @@ class Notifier(private val context: Context) {
         const val CH_CALLS = "incoming_calls"
         const val CH_ONGOING = "ongoing_call"
         const val RING_TIMEOUT_MS = 45_000L
+        const val CH_UPDATES = "updates"
+        private const val UPDATE_ID = 2
         private const val GROUP = "gng-messages"
         private const val SUMMARY_ID = 1
         private const val MAX_LINES = 8

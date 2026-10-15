@@ -16,6 +16,8 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      RELEASE_SECRET: ${{ secrets.RELEASE_SECRET }}
     steps:
       - uses: actions/checkout@v4
 
@@ -72,3 +74,15 @@ jobs:
           target_commitish: ${{ github.sha }}
           files: gng-${{ steps.version.outputs.name }}.apk
           generate_release_notes: true
+
+      # Tell every phone a new version is out, so auto-update installs it within minutes.
+      - name: Push the update to phones
+        if: ${{ env.RELEASE_SECRET != '' }}
+        env:
+          RELEASE_SECRET: ${{ secrets.RELEASE_SECRET }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        run: |
+          curl -fsS -X POST "$SUPABASE_URL/functions/v1/push" \
+            -H "x-release-secret: $RELEASE_SECRET" -H "Content-Type: application/json" \
+            -d '{"version":"${{ steps.version.outputs.name }}"}'
+
