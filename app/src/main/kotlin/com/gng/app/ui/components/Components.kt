@@ -129,12 +129,15 @@ fun GroupAvatar(
     modifier: Modifier = Modifier,
     size: Dp = 48.dp,
     contentDescription: String? = null,
+    /** Each gang gets its own colour (like people's avatars), so they're easy to tell apart. */
+    colorKey: String? = null,
 ) {
     val scheme = MaterialTheme.colorScheme
     if (photoUrl.isNullOrBlank()) {
+        val tone = pickAvatarColor(avatarColors(scheme), colorKey ?: iconKey)
         TonalIcon(
             GroupIcons.resolve(iconKey).icon, modifier, size = size,
-            container = scheme.primaryContainer, content = scheme.onPrimaryContainer,
+            container = tone.container, content = tone.content,
         )
     } else {
         Box(modifier.size(size).clip(CircleShape).background(scheme.primaryContainer)) {

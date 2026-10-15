@@ -1,5 +1,8 @@
 package com.gng.app.ui.group
 
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.clickable
+import com.gng.app.ui.people.LocalOpenPerson
 import android.Manifest
 import android.content.Intent
 import android.net.Uri
@@ -339,7 +342,11 @@ private fun MemberRow(
 ) {
     val scheme = MaterialTheme.colorScheme
     val info = presence?.let { PresenceLogic.describe(it.zoneName, parseInstant(it.updatedAt), now) }
-    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.Top) {
+    val openPerson = LocalOpenPerson.current
+    Row(
+        Modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium).clickable { openPerson(id) }.padding(vertical = 8.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
         StatusAvatar(name, photoUrl, online = info != null && !info.stale, colorKey = id)
         Column(Modifier.padding(horizontal = 14.dp).weight(1f)) {
             Text(name + if (isMe) " (you)" else "", style = MaterialTheme.typography.titleMedium)

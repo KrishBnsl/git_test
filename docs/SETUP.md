@@ -16,7 +16,9 @@ About 15 minutes, all free.
    Then `0007_mentions.sql` (@mentions), `0008_history_and_push.sql` (chat history for new members and new phones:
    the last 100 messages of a gang, all of a DM; reaction notifications, unread counts in notifications), and
    `0009_people_and_requests.sql` (@usernames, colleges, finding anyone on gng, Instagram-style message requests),
-   and `0010_gang_preview.sql` (see a gang before joining it from a QR code or invite link).
+   `0010_gang_preview.sql` (see a gang before joining it from a QR code or invite link),
+   `0011_edit_delete_receipts.sql` (edit / delete for everyone, exact "Seen" times) and `0012_calls_tidy.sql`
+   (one chat entry per call, missed calls, the "typing…" channel).
 
    Invite links point at `https://<you>.github.io/gng/join/?c=CODE`, a small page in `web/` that the
    **Invite page** workflow publishes to GitHub Pages (Settings › Pages › Source: GitHub Actions). It opens gng,

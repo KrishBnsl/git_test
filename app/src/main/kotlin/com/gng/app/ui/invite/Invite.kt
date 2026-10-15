@@ -166,7 +166,7 @@ fun JoinGangDialog(code: String, onDismiss: () -> Unit, onJoined: (Group) -> Uni
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = {
-            if (p != null) GroupAvatar(p.icon, p.photoUrl, size = 72.dp) else GngIcon(GngIcons.Groups, null)
+            if (p != null) GroupAvatar(p.icon, p.photoUrl, size = 72.dp, colorKey = p.id) else GngIcon(GngIcons.Groups, null)
         },
         title = {
             Text(

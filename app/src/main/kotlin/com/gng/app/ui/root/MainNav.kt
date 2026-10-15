@@ -94,9 +94,13 @@ fun MainNav(
                 onJoinCode = { joinCode = it },
             )
         }
-        composable("group/{groupId}") { entry ->
+        composable(
+            "group/{groupId}?call={call}",
+            arguments = listOf(androidx.navigation.navArgument("call") { nullable = true; defaultValue = null }),
+        ) { entry ->
             GroupHomeScreen(
                 groupId = entry.arguments?.getString("groupId")!!,
+                startCall = entry.arguments?.getString("call"),
                 me = me,
                 onBack = { nav.popBackStack() },
                 onTimetable = { nav.navigate("timetable") },

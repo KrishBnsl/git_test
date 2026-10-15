@@ -1,5 +1,9 @@
 package com.gng.app.data
 
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import io.github.jan.supabase.realtime.broadcastFlow
+import io.github.jan.supabase.realtime.broadcast
 import com.gng.app.crypto.Aead
 import com.gng.app.crypto.E2ee
 import com.gng.app.crypto.b64
@@ -370,6 +374,40 @@ class ChatRepository(
         }
     }
 
+    // --- typing… --------------------------------------------------------------------
+
+    /**
+     * "Aman is typing…": a private realtime channel for one chat (members only). [events] gives the
+     * user id of whoever pings; [ping] says you're typing. Nothing is stored anywhere.
+     */
+    inner class TypingRoom(groupId: String) {
+        private val channel = client.channel("typing:$groupId") {
+            isPrivate = true
+            broadcast { receiveOwnBroadcasts = false }
+        }
+        val events: Flow<String> = flow {
+            val pings = channel.broadcastFlow<TypingPing>(event = "typing")
+            channel.subscribe()
+            emitAll(pings.map { it.userId })
+        }
+
+        suspend fun ping(myId: String) {
+            runCatching { channel.broadcast(event = "typing", message = TypingPing(myId)) }
+        }
+
+        suspend fun close() {
+            withContext(NonCancellable) { runCatching { client.realtime.removeChannel(channel) } }
+        }
+    }
+
+    fun typingRoom(groupId: String) = TypingRoom(groupId)
+
+    // --- drafts (what you'd typed but not sent, per chat, on this phone) -----------------
+
+    suspend fun draftText(groupId: String): String = cache.getRaw("draft:$groupId").orEmpty()
+
+    suspend fun saveDraftText(groupId: String, text: String) = cache.putRaw("draft:$groupId", text)
+
     // --- conversations ---------------------------------------------------------------
 
     suspend fun cachedConversations(): List<Conversation>? =
@@ -403,6 +441,23 @@ class ChatRepository(
         } finally {
             withContext(NonCancellable) { client.realtime.removeChannel(channel) }
         }
+    }
+
+    /** Calls going on right now in my conversations (RLS limits it to mine). */
+    suspend fun activeCalls(): List<CallRow> =
+        client.from("calls").select {
+            filter {
+                exact("ended_at", null)
+                gt("started_at", Instant.now().minusSeconds(3 * 3600).toString())
+            }
+        }.decodeList()
+
+    /** Chats pinned to the top of the home list (kept on this phone). */
+    suspend fun pinned(): Set<String> = cache.getRaw("pinned")?.split(',')?.filter { it.isNotBlank() }?.toSet().orEmpty()
+
+    suspend fun setPinned(groupId: String, pinned: Boolean) {
+        val now = if (pinned) pinned() + groupId else pinned() - groupId
+        cache.putRaw("pinned", now.joinToString(","))
     }
 
     suspend fun call(id: String): CallRow? =
@@ -440,6 +495,13 @@ class ChatRepository(
         }
     }
 
+    // --- profiles kept on the phone, so names and photos show without waiting for the network ---
+
+    suspend fun cachedProfile(id: String): Profile? =
+        cache.getRaw("profile:$id")?.let { runCatching { json.decodeFromString<Profile>(it) }.getOrNull() }
+
+    suspend fun rememberProfile(p: Profile) = cache.putRaw("profile:${p.id}", json.encodeToString(Profile.serializer(), p))
+
     suspend fun cachedMembers(groupId: String): List<Member>? =
         cache.getRaw("members:$groupId")?.let { runCatching { json.decodeFromString<List<Member>>(it) }.getOrNull() }
 
@@ -458,3 +520,6 @@ class ChatRepository(
         const val KEY_CONVERSATIONS = "conversations"
     }
 }
+
+@Serializable
+data class TypingPing(@SerialName("user_id") val userId: String)

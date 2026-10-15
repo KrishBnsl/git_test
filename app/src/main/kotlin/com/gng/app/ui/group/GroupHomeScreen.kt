@@ -1,5 +1,14 @@
 package com.gng.app.ui.group
 
+import kotlinx.coroutines.async
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.gng.app.container
+import com.gng.app.call.CallPhase
+import com.gng.app.ui.groups.OngoingCallBar
+import androidx.compose.foundation.shape.CircleShape
+import com.gng.app.ui.people.PhotoViewer
+import com.gng.app.ui.people.PersonSheet
+import com.gng.app.ui.people.LocalOpenPerson
 import android.content.Intent
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
@@ -132,8 +141,12 @@ class GroupHomeViewModel(private val c: AppContainer, private val groupId: Strin
         }
         cachedConversation?.let { mutedUntil = it.mutedUntil?.let(::parseInstant)?.takeIf { t -> t.isAfter(Instant.now()) } }
         runCatching {
-            val group = c.groups.get(groupId)
-            val rows = c.groups.members(groupId)
+            // Both at once: on a first open this is all that stands between you and the chat.
+            val (group, rows) = kotlinx.coroutines.coroutineScope {
+                val g = async { c.groups.get(groupId) }
+                val m = async { c.groups.members(groupId) }
+                g.await() to m.await()
+            }
             c.chat.cacheMembers(groupId, rows)
             GroupContext(group, me, rows.associate { it.userId to it.profiles }, rows.associate { it.userId to it.role })
         }.onSuccess { ctx = it; error = null }.onFailure { if (ctx == null) error = it.friendly() }
@@ -187,6 +200,8 @@ fun GroupHomeScreen(
     onTimetable: () -> Unit,
     onSettings: () -> Unit,
     onMessage: (userId: String) -> Unit,
+    /** "voice" or "video": start a call as soon as the chat opens (Call back from a missed call). */
+    startCall: String? = null,
 ) {
     val vm = gngViewModel(key = "group-$groupId") { GroupHomeViewModel(it, groupId) }
     LaunchedEffect(groupId, me) {
@@ -209,9 +224,27 @@ fun GroupHomeScreen(
     val askCallPermissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
         val video = pendingCall ?: return@rememberLauncherForActivityResult
         pendingCall = null
-        if (granted.values.all { it }) startCall(video)
+        if (granted[android.Manifest.permission.RECORD_AUDIO] == true) startCall(video)
+    }
+    fun requestCall(video: Boolean) {
+        val missing = callPermissions(video).filter { ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isEmpty()) startCall(video) else {
+            pendingCall = video
+            askCallPermissions.launch(missing.toTypedArray())
+        }
     }
 
+    // Tap anyone (in chat, Squad, the DM header) to see their profile.
+    var personFor by remember { mutableStateOf<String?>(null) }
+    CompositionLocalProvider(LocalOpenPerson provides { personFor = it }) {
+    // Opened with "Call back": start the call once the chat has loaded.
+    var autoCalled by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(ctx != null, startCall) {
+        if (ctx != null && startCall != null && !autoCalled) {
+            autoCalled = true
+            requestCall(startCall == "video")
+        }
+    }
     GroupScaffold(
         ctx = ctx,
         error = vm.error,
@@ -223,18 +256,18 @@ fun GroupHomeScreen(
         onLeave = { vm.leave(onBack) },
         mutedUntil = vm.mutedUntil,
         onMute = vm::mute,
-        onCall = { video ->
-            val missing = callPermissions(video).filter { ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED }
-            if (missing.isEmpty()) startCall(video) else {
-                pendingCall = video
-                askCallPermissions.launch(missing.toTypedArray())
-            }
-        },
+        onCall = ::requestCall,
         onVerify = {
             scope.launch { safetyCode = vm.safetyCode() ?: "They haven't opened the new version of gng yet, so there's no key to check." }
         },
     ) { current ->
         if (ctx != null) {
+          Column {
+            // You're on a call (maybe from another chat): one tap back to it.
+            val ongoing by context.container.calls.state.collectAsStateWithLifecycle()
+            ongoing?.takeIf { it.phase != CallPhase.Ended && it.phase != CallPhase.Ringing }?.let { call ->
+                OngoingCallBar(call) { context.startActivity(CallActivity.intent(context, call.callId, CallActivity.ACTION_SHOW)) }
+            }
             when (if (ctx.isDm) GroupTab.Chat else current) {
                 GroupTab.Chat -> ChatScreen(ctx, onOpenEvent = { m -> tab = tabForEvent(m.kind).ordinal }, onClosed = onBack)
                 GroupTab.Plans -> PlansTab(ctx)
@@ -242,6 +275,16 @@ fun GroupHomeScreen(
                 GroupTab.Squad -> SquadTab(ctx, onTimetable, onMessage)
                 GroupTab.Study -> StudyTab(ctx)
             }
+          }
+        }
+    }
+    }
+    personFor?.let { id ->
+        val p = ctx?.members?.get(id)
+        if (p == null) {
+            LaunchedEffect(id) { personFor = null }
+        } else {
+            PersonSheet(p, isMe = id == ctx.me.id, onDismiss = { personFor = null }, onMessage = { personFor = null; onMessage(it) })
         }
     }
 
@@ -297,14 +340,25 @@ fun GroupScaffold(
             TopAppBar(
                 title = {
                     if (ctx != null) {
+                        val openPerson = LocalOpenPerson.current
+                        var viewPhoto by remember { mutableStateOf(false) }
+                        if (viewPhoto) PhotoViewer(ctx.group.photoUrl, ctx.group.name, ctx.group.id, onDismiss = { viewPhoto = false })
                         Row(
                             Modifier.clip(MaterialTheme.shapes.medium)
-                                .clickable(enabled = !dm, onClick = onSettings).padding(vertical = 4.dp, horizontal = 2.dp),
+                                // A gang's name opens its settings; a DM's opens the other person's profile.
+                                .clickable { if (dm) ctx.other?.let { openPerson(it.id) } else onSettings() }
+                                .padding(vertical = 4.dp, horizontal = 2.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             val other = ctx.other
-                            if (dm) Avatar(ctx.title, other?.avatarUrl, size = 40.dp, colorKey = other?.id ?: ctx.group.id)
-                            else GroupAvatar(ctx.group.icon, ctx.group.photoUrl, size = 40.dp)
+                            if (dm) {
+                                Avatar(ctx.title, other?.avatarUrl, size = 40.dp, colorKey = other?.id ?: ctx.group.id)
+                            } else {
+                                // Tap the gang's photo to see it big.
+                                Box(Modifier.clip(CircleShape).clickable { viewPhoto = true }) {
+                                    GroupAvatar(ctx.group.icon, ctx.group.photoUrl, size = 40.dp, colorKey = ctx.group.id)
+                                }
+                            }
                             Column(Modifier.padding(start = 12.dp)) {
                                 Text(ctx.title, style = MaterialTheme.typography.titleMedium, maxLines = 1)
                                 Row(verticalAlignment = Alignment.CenterVertically) {

@@ -56,6 +56,11 @@ import com.gng.app.ui.components.SectionHeader
 import com.gng.app.ui.components.SegmentedChoice
 import com.gng.app.ui.icons.GngIcons
 import com.gng.app.ui.theme.DynamicColorSupported
+import com.gng.app.ui.theme.Accent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.draw.clip
 import com.gng.app.ui.update.UpdateActions
 import com.gng.app.ui.update.actions
 import com.gng.app.ui.update.UpdateCard
@@ -66,7 +71,7 @@ import kotlinx.coroutines.launch
 fun SettingsScreen(me: Profile, onEditProfile: () -> Unit, onTimetable: () -> Unit, onBack: () -> Unit) {
     val c = LocalContext.current.container
     val theme by c.settings.theme.collectAsStateWithLifecycle(ThemeMode.System)
-    val dynamic by c.settings.dynamicColor.collectAsStateWithLifecycle(true)
+    val accentName by c.settings.accent.collectAsStateWithLifecycle(null)
     val scope = rememberCoroutineScope()
 
     val updates = c.updates
@@ -99,9 +104,9 @@ fun SettingsScreen(me: Profile, onEditProfile: () -> Unit, onTimetable: () -> Un
             scope.launch { c.settings.setAutoUpdate(it) }
             AutoUpdate.schedule(context, it)
         },
-        me = me, theme = theme, dynamicColor = dynamic,
+        me = me, theme = theme, accent = Accent.from(accentName),
         onTheme = { scope.launch { c.settings.setTheme(it) } },
-        onDynamicColor = { scope.launch { c.settings.setDynamicColor(it) } },
+        onAccent = { scope.launch { c.settings.setAccent(it.name) } },
         onEditProfile = onEditProfile, onTimetable = onTimetable, onBack = onBack,
         onLogout = {
             scope.launch {
@@ -121,9 +126,9 @@ fun SettingsScreen(me: Profile, onEditProfile: () -> Unit, onTimetable: () -> Un
 fun SettingsContent(
     me: Profile,
     theme: ThemeMode,
-    dynamicColor: Boolean,
+    accent: Accent = Accent.Default,
     onTheme: (ThemeMode) -> Unit,
-    onDynamicColor: (Boolean) -> Unit,
+    onAccent: (Accent) -> Unit = {},
     onEditProfile: () -> Unit,
     onTimetable: () -> Unit,
     onBack: () -> Unit,
@@ -177,24 +182,8 @@ fun SettingsContent(
                 selected = theme, onSelect = onTheme, checkIcon = GngIcons.Check,
             )
             Spacer(Modifier.height(8.dp))
-            ListItem(
-                colors = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
-                leadingContent = { GngIcon(GngIcons.Palette, null) },
-                headlineContent = { Text("Dynamic colour") },
-                supportingContent = {
-                    Text(
-                        if (DynamicColorSupported) "Match your wallpaper, like the rest of Android"
-                        else "Needs Android 12 or newer",
-                    )
-                },
-                trailingContent = {
-                    Switch(
-                        checked = dynamicColor && DynamicColorSupported,
-                        onCheckedChange = onDynamicColor,
-                        enabled = DynamicColorSupported,
-                    )
-                },
-            )
+            Text("Theme colour", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 8.dp, bottom = 10.dp))
+            AccentPicker(accent, onAccent)
 
             SectionHeader("Notifications & privacy")
             val clear = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent)
@@ -347,6 +336,40 @@ data class DeliveryRestrictions(val battery: Boolean, val fullScreen: Boolean) {
             if (Build.VERSION.SDK_INT < 34) return
             runCatching {
                 context.startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:${context.packageName}")))
+            }
+        }
+    }
+}
+
+/** A row of colour swatches; "Wallpaper" (Material You) only where Android supports it. */
+@Composable
+private fun AccentPicker(selected: Accent, onSelect: (Accent) -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    val choices = Accent.entries.filter { it != Accent.Wallpaper || DynamicColorSupported }
+    androidx.compose.foundation.layout.Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween,
+    ) {
+        choices.forEach { a ->
+            androidx.compose.foundation.layout.Column(
+                horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+                modifier = Modifier.clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp)).clickable { onSelect(a) }.padding(4.dp),
+            ) {
+                val ring = if (a == selected) scheme.onSurface else androidx.compose.ui.graphics.Color.Transparent
+                androidx.compose.foundation.layout.Box(
+                    Modifier.size(44.dp).border(2.dp, ring, androidx.compose.foundation.shape.CircleShape).padding(4.dp)
+                        .clip(androidx.compose.foundation.shape.CircleShape)
+                        .background(
+                            a.seed?.let { androidx.compose.ui.graphics.SolidColor(it) }
+                                ?: androidx.compose.ui.graphics.Brush.sweepGradient(
+                                    listOf(androidx.compose.ui.graphics.Color(0xFFE8506E), androidx.compose.ui.graphics.Color(0xFFF0B429),
+                                        androidx.compose.ui.graphics.Color(0xFF00A884), androidx.compose.ui.graphics.Color(0xFF2F8CF0),
+                                        androidx.compose.ui.graphics.Color(0xFF7C5CFA), androidx.compose.ui.graphics.Color(0xFFE8506E)),
+                                ),
+                        ),
+                    contentAlignment = androidx.compose.ui.Alignment.Center,
+                ) { if (a == selected) GngIcon(GngIcons.Check, null, size = 20.dp, tint = androidx.compose.ui.graphics.Color.White) }
+                Text(a.label, style = MaterialTheme.typography.labelSmall, color = scheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
             }
         }
     }

@@ -1,5 +1,7 @@
 package com.gng.app.notify
 
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.async
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -78,12 +80,16 @@ class Inbox(private val c: AppContainer) {
         val messageId = data["message_id"]?.toLongOrNull() ?: return
         val me = c.auth.awaitUserId() ?: return
         val m = fromPush(data, groupId, messageId, me) ?: c.chat.fetchOne(messageId, me) ?: return
+        // Already decrypted: keep it, so the chat opens with it instantly.
+        if (m.payload.t != "locked") c.chat.remember(m)
         // A message request from someone outside your gangs: no receipts until you accept.
         val isRequest = data["request_from"]?.let { it != me } == true
         try {
             if (m.userId == me) return
             if (openConversation == groupId && c.foreground) return
             if (!c.settings.push.first()) return
+            // Read on another screen already (the server counts nothing unread): nothing to tell you.
+            if (data["unread"] == "0") return
 
             val conversation = c.chat.cachedConversations()?.firstOrNull { it.id == groupId }
             val taggedMe = m.payload.mentions(me) || data["mentions"]?.split(',')?.contains(me) == true
@@ -111,12 +117,29 @@ class Inbox(private val c: AppContainer) {
                 previews -> (senderName ?: "Someone") + if (taggedMe && !isDm) " mentioned you" else ""
                 else -> "Someone"
             }
-            c.notifier.showMessage(
+            // Faces and the chat's picture, like a real messenger: loaded side by side, never holding things up for long.
+            val senderProfile = m.userId?.let { members[it] ?: c.chat.cachedProfile(it) }
+            val (senderIcon, chatIcon) = coroutineScope {
+                val sender = async { m.userId?.let { NotificationArt.avatar(c.appContext, senderName ?: "?", senderProfile?.avatarUrl, it) } }
+                val chat = async { if (isDm) null else NotificationArt.avatar(c.appContext, title, conversation?.photoUrl, groupId) }
+                sender.await().let { it to (chat.await() ?: it) }
+            }
+            // Old messages arriving late (phone was off) show up, but quietly.
+            val stale = java.time.Duration.between(m.createdAt, Instant.now()).toMinutes() > 10
+            fun post(image: android.net.Uri?, replace: Boolean) = c.notifier.showMessage(
                 groupId, title, isDm, shownSender, text, messageId, myName,
                 unread = data["unread"]?.toIntOrNull(),
                 totalUnread = data["unread_total"]?.toIntOrNull(),
                 unreadChats = data["unread_chats"]?.toIntOrNull(),
+                senderKey = m.userId, senderIcon = senderIcon, chatIcon = chatIcon, image = image,
+                sentAt = m.createdAt.toEpochMilli(), silent = stale || replace, replaceLast = replace,
             )
+            post(null, replace = false)
+            // A photo: once it's downloaded, put it right in the notification (quietly; it already rang).
+            m.payload.media?.takeIf { previews && m.payload.t == "image" && it.size in 1..4_000_000 }?.let { ref ->
+                withTimeoutOrNull(5_000) { runCatching { NotificationArt.imageUri(c.appContext, c.media.file(ref)) }.getOrNull() }
+                    ?.let { post(it, replace = true) }
+            }
         } finally {
             // We've got it, so the sender can see "Delivered". After the notification, not before.
             if (!isRequest) runCatching { c.chat.markSeen(groupId, messageId, null) }
@@ -160,6 +183,20 @@ class Inbox(private val c: AppContainer) {
             groupId, title, isDm, name, text, 0, members[me]?.displayName ?: "You",
             counts = false,
         )
+    }
+
+    /** A call ended. If nobody picked up (and it wasn't you calling), "Missed call from Aman". */
+    suspend fun onCallEnded(data: Map<String, String>) {
+        val callId = data["call_id"] ?: return
+        val answeredHere = c.calls.wasInCall(callId)
+        c.calls.remoteEnded(callId)
+        if (data["missed"] != "true" || answeredHere) return
+        val me = c.auth.awaitUserId() ?: return
+        val groupId = data["group_id"] ?: return
+        if (data["started_by"] == me || !c.settings.push.first()) return
+        val isDm = data["group_kind"] != "gang"
+        val caller = data["sender_name"] ?: "Someone"
+        c.notifier.showMissedCall(groupId, callId, caller, if (isDm) null else data["group_name"], data["video"] == "true")
     }
 
     /** Someone joined a chat or got a new phone: wrap the older keys for them so they can read the history. */
@@ -229,7 +266,7 @@ class PushService : FirebaseMessagingService() {
                             groupName = data["group_name"],
                             isDm = data["group_kind"]?.let { it == "dm" },
                         )
-                        "call_end" -> data["call_id"]?.let { c.calls.remoteEnded(it) }
+                        "call_end" -> c.inbox.onCallEnded(data)
                     }
                 }
             }

@@ -1,5 +1,9 @@
 package com.gng.app.notify
 
+import androidx.core.graphics.drawable.IconCompat
+import androidx.core.content.LocusIdCompat
+import android.net.Uri
+import android.graphics.Bitmap
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Notification
@@ -27,9 +31,15 @@ class Notifier(private val context: Context) {
     init {
         if (Build.VERSION.SDK_INT >= 26) {
             val nm = context.getSystemService(NotificationManager::class.java)
+            // Separate channels so DMs and gangs can have their own sound (Android settings › Notifications).
             nm.createNotificationChannel(
-                NotificationChannel(CH_MESSAGES, "Messages", NotificationManager.IMPORTANCE_HIGH).apply {
-                    description = "Chats in your gangs and DMs"
+                NotificationChannel(CH_MESSAGES, "Gang messages", NotificationManager.IMPORTANCE_HIGH).apply {
+                    description = "Messages in your gangs"
+                },
+            )
+            nm.createNotificationChannel(
+                NotificationChannel(CH_DM, "Direct messages", NotificationManager.IMPORTANCE_HIGH).apply {
+                    description = "Messages from one person"
                 },
             )
             nm.createNotificationChannel(
@@ -42,6 +52,7 @@ class Notifier(private val context: Context) {
             )
             nm.deleteNotificationChannel("calls") // the old, noisy channel from 0.4.0
             nm.createNotificationChannel(NotificationChannel(CH_ONGOING, "Ongoing call", NotificationManager.IMPORTANCE_LOW))
+            nm.createNotificationChannel(NotificationChannel(CH_MISSED, "Missed calls", NotificationManager.IMPORTANCE_DEFAULT))
             nm.createNotificationChannel(
                 NotificationChannel(CH_UPDATES, "App updates", NotificationManager.IMPORTANCE_LOW).apply {
                     description = "When gng updates itself, or needs a tap to finish"
@@ -80,6 +91,19 @@ class Notifier(private val context: Context) {
         totalUnread: Int? = null,
         unreadChats: Int? = null,
         quiet: Boolean = false,
+        /** Who sent it: a stable key, and their face. */
+        senderKey: String? = null,
+        senderIcon: Bitmap? = null,
+        /** The chat's picture (gang photo, or the other person in a DM), for the conversation shortcut. */
+        chatIcon: Bitmap? = null,
+        /** A photo in the message, shown inline. */
+        image: Uri? = null,
+        /** When it was sent (old messages arriving late shouldn't look new). */
+        sentAt: Long = System.currentTimeMillis(),
+        /** Post without sound or vibration. */
+        silent: Boolean = false,
+        /** Swap the newest line instead of adding one (the same message, now with its photo). */
+        replaceLast: Boolean = false,
     ) {
         if (!canPost()) return
         val id = groupId.hashCode()
@@ -87,7 +111,7 @@ class Notifier(private val context: Context) {
         val lastId = lastMessageId.takeIf { it > 0 } ?: previous?.extras?.getLong(EXTRA_LAST_ID) ?: 0
         val shownBefore = previous?.extras?.getInt(EXTRA_COUNT) ?: 0
         val count = when {
-            !counts -> shownBefore
+            !counts || replaceLast -> shownBefore
             unread != null && unread > 0 -> unread
             else -> shownBefore + 1
         }
@@ -96,9 +120,17 @@ class Notifier(private val context: Context) {
         val style = NotificationCompat.MessagingStyle(me)
         if (!isDm) style.setConversationTitle(title).setGroupConversation(true)
         val earlier = previous?.let { NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(it) }?.messages.orEmpty()
-        (earlier.takeLast(MAX_LINES - 1)).forEach { style.addMessage(it) }
-        val person = if (sender == myName) me else Person.Builder().setName(sender).setKey(sender).build()
-        style.addMessage(text, System.currentTimeMillis(), person)
+        (if (replaceLast) earlier.dropLast(1) else earlier).takeLast(MAX_LINES - 1).forEach { style.addMessage(it) }
+        val person = if (sender == myName) me else Person.Builder().setName(sender).setKey(senderKey ?: sender)
+            .apply { senderIcon?.let { setIcon(IconCompat.createWithBitmap(it)) } }.build()
+        style.addMessage(
+            NotificationCompat.MessagingStyle.Message(text, sentAt, person).apply { image?.let { setData("image/jpeg", it) } },
+        )
+        chatIcon?.let { NotificationArt.pushConversation(context, groupId, title, it, if (isDm) person else null) }
+        // A pile of messages arriving at once (the phone was offline) makes one sound, not twenty.
+        val now = System.currentTimeMillis()
+        val alert = !silent && !quiet && now - lastAlert > ALERT_GAP_MS
+        if (alert) lastAlert = now
 
         val reply = NotificationCompat.Action.Builder(
             android.R.drawable.ic_menu_send, "Reply",
@@ -115,9 +147,13 @@ class Notifier(private val context: Context) {
             .setShowsUserInterface(false)
             .build()
 
-        val n = NotificationCompat.Builder(context, CH_MESSAGES)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+        val n = NotificationCompat.Builder(context, if (isDm) CH_DM else CH_MESSAGES)
+            .setSmallIcon(R.drawable.ic_notification)
             .setStyle(style)
+            .setShortcutId(groupId)
+            .setLocusId(LocusIdCompat(groupId))
+            .setSilent(!alert)
+            .apply { chatIcon?.let { setLargeIcon(it) } }
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setSubText(if (count > 1) "$count new messages" else null)
@@ -169,7 +205,7 @@ class Notifier(private val context: Context) {
             inbox.addLine(if (title.isEmpty()) preview else "$title  $preview")
         }
         val n = NotificationCompat.Builder(context, CH_MESSAGES)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("gng")
             .setContentText(summary)
             .setStyle(inbox)
@@ -196,7 +232,7 @@ class Notifier(private val context: Context) {
     private fun activeMessages(): List<Notification> =
         runCatching {
             manager.activeNotifications
-                .filter { it.notification.channelIdCompat() == CH_MESSAGES && it.id != SUMMARY_ID && it.notification.group == GROUP }
+                .filter { it.notification.channelIdCompat() in setOf(CH_MESSAGES, CH_DM) && it.id != SUMMARY_ID && it.notification.group == GROUP }
                 .sortedByDescending { it.postTime }
                 .map { it.notification }
         }.getOrDefault(emptyList())
@@ -226,7 +262,7 @@ class Notifier(private val context: Context) {
         )
         val person = Person.Builder().setName(caller).setImportant(true).build()
         val builder = NotificationCompat.Builder(context, CH_CALLS)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(if (video) "📹 $caller" else "📞 $caller")
             .setContentText(if (title == caller) "Incoming ${if (video) "video" else "voice"} call" else "Calling $title")
             .setCategory(NotificationCompat.CATEGORY_CALL)
@@ -241,6 +277,25 @@ class Notifier(private val context: Context) {
 
     fun cancelCall(callId: String) = manager.cancel(callId.hashCode())
 
+    /** "Missed voice call from Aman" (in a gang: "… in Hostel H4"), tap to open the chat. */
+    @SuppressLint("MissingPermission")
+    fun showMissedCall(groupId: String, callId: String, caller: String, gang: String?, video: Boolean) {
+        if (!canPost()) return
+        val kind = if (video) "video" else "voice"
+        manager.notify(
+            "missed:$callId".hashCode(),
+            NotificationCompat.Builder(context, CH_MISSED)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle("Missed $kind call")
+                .setContentText(if (gang != null) "$caller in $gang" else "from $caller")
+                .setCategory(NotificationCompat.CATEGORY_MISSED_CALL)
+                .setContentIntent(openChat(groupId, "missed:$callId".hashCode()))
+                .addAction(NotificationCompat.Action.Builder(null, "Call back", openChat(groupId, "cb:$callId".hashCode(), callBack = video)).build())
+                .setAutoCancel(true)
+                .build(),
+        )
+    }
+
     fun ongoingCall(title: String, callId: String): Notification {
         val open = PendingIntent.getActivity(
             context, 7, CallActivity.intent(context, callId, CallActivity.ACTION_SHOW),
@@ -252,7 +307,7 @@ class Notifier(private val context: Context) {
         )
         val person = Person.Builder().setName(title).build()
         return NotificationCompat.Builder(context, CH_ONGOING)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("On a call · $title")
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_CALL)
@@ -270,7 +325,7 @@ class Notifier(private val context: Context) {
         manager.notify(
             UPDATE_ID,
             NotificationCompat.Builder(context, CH_UPDATES)
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle("gng update ready")
                 .setContentText("Tap to install. Later updates install by themselves.")
                 .setContentIntent(install)
@@ -287,7 +342,7 @@ class Notifier(private val context: Context) {
         manager.notify(
             UPDATE_ID,
             NotificationCompat.Builder(context, CH_UPDATES)
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle("gng updated to $version")
                 .setContentText("Tap to see what's new")
                 .setContentIntent(
@@ -304,9 +359,11 @@ class Notifier(private val context: Context) {
 
     // --- intents -------------------------------------------------------------------
 
-    private fun openChat(groupId: String, requestCode: Int): PendingIntent = PendingIntent.getActivity(
+    /** Opens a chat; [callBack] (true = video) also starts a call there. */
+    private fun openChat(groupId: String, requestCode: Int, callBack: Boolean? = null): PendingIntent = PendingIntent.getActivity(
         context, requestCode,
         Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_OPEN_GROUP, groupId)
+            .apply { callBack?.let { putExtra(MainActivity.EXTRA_CALL_BACK, if (it) "video" else "voice") } }
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
@@ -326,6 +383,11 @@ class Notifier(private val context: Context) {
         const val CH_ONGOING = "ongoing_call"
         const val RING_TIMEOUT_MS = 45_000L
         const val CH_UPDATES = "updates"
+        const val CH_DM = "direct_messages"
+        /** Within this long of the last sound, new messages arrive quietly. */
+        private const val ALERT_GAP_MS = 3_000L
+        @Volatile private var lastAlert = 0L
+        const val CH_MISSED = "missed_calls"
         private const val UPDATE_ID = 2
         private const val GROUP = "gng-messages"
         private const val SUMMARY_ID = 1

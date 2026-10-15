@@ -62,6 +62,16 @@ class ChatViewModel(private val c: AppContainer, private val ctx: GroupContext) 
         private set
     /** A request I sent that they haven't accepted yet. */
     val outgoingRequest = ctx.group.isRequest && ctx.group.requestedBy == myId
+    /** Who's typing right now (user ids), each forgotten a few seconds after their last ping. */
+    var typing by mutableStateOf<List<String>>(emptyList())
+        private set
+    private val typingSeen = mutableMapOf<String, Long>()
+    private val typingRoom = c.chat.typingRoom(groupId)
+    private var lastPing = 0L
+    /** What you'd typed here last time and didn't send. */
+    var initialDraft by mutableStateOf<String?>(null)
+        private set
+    private var draftSave: Job? = null
     private var loadingOlder = false
     private var visible = false
 
@@ -86,8 +96,31 @@ class ChatViewModel(private val c: AppContainer, private val ctx: GroupContext) 
             markSeen()
         }
         viewModelScope.launch { listen() }
+        viewModelScope.launch { initialDraft = c.chat.draftText(groupId) }
+        viewModelScope.launch {
+            runCatching {
+                typingRoom.events.collect { uid ->
+                    if (uid == myId) return@collect
+                    typingSeen[uid] = System.currentTimeMillis()
+                    typing = typingSeen.keys.toList()
+                }
+            }
+        }
+        // Forget people who stopped typing.
+        viewModelScope.launch {
+            while (true) {
+                delay(1_500)
+                val cutoff = System.currentTimeMillis() - TYPING_TIMEOUT_MS
+                if (typingSeen.values.any { it < cutoff }) {
+                    typingSeen.entries.removeAll { it.value < cutoff }
+                    typing = typingSeen.keys.toList()
+                }
+            }
+        }
         // If someone here can't read older messages yet (new member, new phone), share the keys.
         viewModelScope.launch { runCatching { c.e2ee.shareHistory(myId) } }
+        // Have the encryption key ready before you type, so the first message goes out instantly.
+        viewModelScope.launch { runCatching { c.e2ee.sendingKey(groupId, myId) } }
         // Anything sent between the first sync and the realtime channel coming up.
         viewModelScope.launch {
             delay(2_500)
@@ -105,6 +138,7 @@ class ChatViewModel(private val c: AppContainer, private val ctx: GroupContext) 
                 c.chat.live(groupId).collect { event ->
                     when (event) {
                         is LiveEvent.NewMessage -> {
+                            event.row.userId?.let { uid -> if (typingSeen.remove(uid) != null) typing = typingSeen.keys.toList() }
                             val m = c.chat.decrypt(event.row, myId)
                             merge(listOf(m))
                             // Into the cache too, so it's still there next time the chat opens.
@@ -197,12 +231,32 @@ class ChatViewModel(private val c: AppContainer, private val ctx: GroupContext) 
     private fun sorted(list: List<ChatMessage>) =
         list.filter { it.id !in hidden }.distinctBy { it.id }.sortedWith(compareBy<ChatMessage>({ if (it.isPending) 1 else 0 }, { if (it.isPending) it.createdAt.toEpochMilli() else it.id }))
 
+    /** The composer changed: tell the others you're typing (at most every few seconds), and keep the draft. */
+    fun onDraftChanged(text: String) {
+        val now = System.currentTimeMillis()
+        if (text.isNotBlank() && now - lastPing > TYPING_PING_MS && editing == null) {
+            lastPing = now
+            viewModelScope.launch { typingRoom.ping(myId) }
+        }
+        draftSave?.cancel()
+        draftSave = viewModelScope.launch {
+            delay(500)
+            c.chat.saveDraftText(groupId, text)
+        }
+    }
+
     // --- sending ----------------------------------------------------------------------
 
     /** [tagged]: people picked from the @ list; only those still named in the text are kept. */
     fun sendText(text: String, tagged: Collection<String> = emptyList()) {
         val body = text.trim().takeIf { it.isNotEmpty() } ?: return
-        val mentions = tagged.distinct().filter { id -> id != myId && ctx.members[id]?.let { "@${it.displayName}" in body } == true }
+        // @all: everyone in the gang, as long as "@all" is still in the text.
+        val everyone = EVERYONE in tagged && "@$ALL_TAG" in body
+        val mentions = if (everyone) {
+            ctx.members.keys.filter { it != myId }.take(MAX_MENTIONS)
+        } else {
+            tagged.distinct().filter { id -> id != myId && ctx.members[id]?.let { "@${it.displayName}" in body } == true }
+        }
         // Keep tags that were already in an edited message and are still named in it.
         val kept = editing?.payload?.mentions.orEmpty().filter { id -> ctx.members[id]?.let { "@${it.displayName}" in body } == true }
         val all = (mentions + kept).distinct().takeIf { it.isNotEmpty() }
@@ -221,7 +275,7 @@ class ChatViewModel(private val c: AppContainer, private val ctx: GroupContext) 
             }
             return
         }
-        send(withReply(Payload("text", text = body, mentions = all)))
+        send(withReply(Payload("text", text = body, mentions = all, all = everyone.takeIf { it })))
     }
 
     // --- edit & delete ----------------------------------------------------------------
@@ -460,6 +514,8 @@ class ChatViewModel(private val c: AppContainer, private val ctx: GroupContext) 
     }
 
     override fun onCleared() {
+        // The view model's scope is gone; leave the typing channel from the app's side instead.
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch { runCatching { typingRoom.close() } }
         if (c.inbox.openConversation == groupId) c.inbox.openConversation = null
     }
 
@@ -469,6 +525,12 @@ class ChatViewModel(private val c: AppContainer, private val ctx: GroupContext) 
 
         private val DAY_TIME = DateTimeFormatter.ofPattern("d MMM, h:mm a")
         const val EDIT_WINDOW_S = 15 * 60L
+        private const val TYPING_PING_MS = 3_000L
+        private const val TYPING_TIMEOUT_MS = 6_000L
+        /** Marks "@all" among the picked tags. */
+        const val EVERYONE = "*"
+        /** The server accepts up to 50 tags per message. */
+        private const val MAX_MENTIONS = 50
         const val DELETE_WINDOW_S = 2 * 24 * 3600L
 
         /** "10:42 pm" today, "Yesterday, 10:42 pm", otherwise "3 Oct, 10:42 pm". */

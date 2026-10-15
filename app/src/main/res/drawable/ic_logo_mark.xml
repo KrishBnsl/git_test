@@ -1,12 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The gng mark: a chat bubble with three dots (the gang) cut out of it. Tintable. -->
+<!-- The gng mark in one colour (themed icons, the sign-in screen): the dots are cut out. Tintable. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
     <path
-        android:fillColor="#FFFFFFFF"
-        android:fillType="evenOdd"
-        android:pathData="M36,34h36a10,10 0,0 1,10 10v18a10,10 0,0 1,-10 10H52l-11,9v-9h-5a10,10 0,0 1,-10 -10V44a10,10 0,0 1,10 -10z M42,53m-4.4,0a4.4,4.4 0,1 1,8.8 0a4.4,4.4 0,1 1,-8.8 0 M54,53m-4.4,0a4.4,4.4 0,1 1,8.8 0a4.4,4.4 0,1 1,-8.8 0 M66,53m-4.4,0a4.4,4.4 0,1 1,8.8 0a4.4,4.4 0,1 1,-8.8 0" />
+        android:pathData="M68,32V68A12,12 0,0 1,45.6 74"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="10"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path android:fillColor="#FFFFFFFF" android:fillType="evenOdd" android:pathData="M36,48a18,18 0,1 0,36 0a18,18 0,1 0,-36 0 M39.3,48a3.2,3.2 0,1 0,6.4 0a3.2,3.2 0,1 0,-6.4 0 M45.7,48a3.8,3.8 0,1 0,7.6 0a3.8,3.8 0,1 0,-7.6 0 M53.3,48a3.2,3.2 0,1 0,6.4 0a3.2,3.2 0,1 0,-6.4 0" />
 </vector>

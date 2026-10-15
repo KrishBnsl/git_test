@@ -132,6 +132,8 @@ data class Payload(
     val mentions: List<String>? = null,
     /** Set on this phone (never sent): the sender changed it after sending. */
     val edited: Boolean? = null,
+    /** The message tags everyone (@all). */
+    val all: Boolean? = null,
 ) {
     val isDeleted get() = t == "deleted"
     fun mentions(userId: String) = mentions?.contains(userId) == true

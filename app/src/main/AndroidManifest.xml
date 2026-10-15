@@ -79,6 +79,9 @@
         <activity
             android:name=".call.CallActivity"
             android:exported="false"
+            android:supportsPictureInPicture="true"
+            android:resizeableActivity="true"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
             android:launchMode="singleTop"
             android:showOnLockScreen="true"
             android:excludeFromRecents="true"
