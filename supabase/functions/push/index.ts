@@ -130,13 +130,15 @@ Deno.serve(async (req) => {
 /** The conversation's name and kind, and the sender's display name. Not secret: the server stores them in plain. */
 async function names_(groupId: string, senderId: string | null): Promise<Record<string, string>> {
   const [group, sender] = await Promise.all([
-    supabase.from("groups").select("name, kind").eq("id", groupId).maybeSingle(),
+    supabase.from("groups").select("name, kind, dm_status, requested_by").eq("id", groupId).maybeSingle(),
     senderId
       ? supabase.from("profiles").select("display_name").eq("id", senderId).maybeSingle()
       : Promise.resolve({ data: null }),
   ]);
   return {
     ...(group.data ? { group_name: String(group.data.name), group_kind: String(group.data.kind ?? "gang") } : {}),
+    // A DM that's still a request: the phone says "Message request" instead of a normal chat.
+    ...(group.data?.dm_status === "pending" && group.data.requested_by ? { request_from: String(group.data.requested_by) } : {}),
     ...(sender.data?.display_name ? { sender_name: String(sender.data.display_name) } : {}),
   };
 }

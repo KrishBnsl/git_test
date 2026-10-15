@@ -6,16 +6,60 @@
 -- "can't decrypt". Now any member's phone that holds an old epoch key re-wraps it for current
 -- members who lack it. The server still never sees a key: it only stores what phones wrapped.
 --
+-- How far back you can read:
+--   gangs: the last 100 messages from before you joined, and everything since;
+--   DMs:   everything;
+--   after a reinstall: the same as before (your membership didn't change), so all of it.
+-- Members from before this migration keep their full history.
+--
 -- Push: new members and new device keys wake the other members' phones (silently) so one of
 -- them shares the history right away; reactions to your messages notify you; the push function
 -- gets names and unread counts in one query so the phone can notify without any lookups.
+
+------------------------------------------------------------------------------
+-- How far back each member can read
+------------------------------------------------------------------------------
+
+alter table public.group_members add column if not exists history_from bigint not null default 0;
+
+-- New gang members start 100 messages back; DM members from the start.
+create or replace function public.set_history_from() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if (select kind from groups where id = new.group_id) = 'gang' then
+    new.history_from := coalesce(
+      (select id from messages where group_id = new.group_id order by id desc offset 99 limit 1), 0);
+    -- The history you get on joining isn't "unread": start your read cursor at the latest message.
+    insert into read_states (group_id, user_id, delivered_id, read_id)
+    select new.group_id, new.user_id, coalesce(max(id), 0), coalesce(max(id), 0) from messages where group_id = new.group_id
+    on conflict (group_id, user_id) do nothing;
+  else
+    new.history_from := 0;
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists members_history_from on public.group_members;
+create trigger members_history_from before insert on public.group_members
+  for each row execute function public.set_history_from();
+
+-- The first message id I may read in a conversation (null if I'm not in it).
+create or replace function public.my_history_from(gid uuid) returns bigint
+language sql stable security definer set search_path = public as $$
+  select history_from from group_members where group_id = gid and user_id = auth.uid();
+$$;
+
+drop policy if exists "members read messages" on public.messages;
+create policy "members read messages" on public.messages for select
+  using (id >= public.my_history_from(group_id));
 
 ------------------------------------------------------------------------------
 -- Sharing old epoch keys
 ------------------------------------------------------------------------------
 
 -- Every (conversation, epoch) I can open where some current member can't, with that member's
--- current public key, so my phone can wrap the epoch key for them.
+-- current public key, so my phone can wrap the epoch key for them. Only epochs that member is
+-- allowed to read something in (a message, or a reaction to one) from their history_from on.
 create or replace function public.key_shares_needed()
 returns table (group_id uuid, epoch int, recipient_id uuid, recipient_key_id text, public_key text)
 language sql stable security definer set search_path = public as $$
@@ -26,6 +70,8 @@ language sql stable security definer set search_path = public as $$
   join user_keys uk on uk.user_id = gm.user_id
   where mine.recipient_id = auth.uid()
     and exists (select 1 from group_members self where self.group_id = mine.group_id and self.user_id = auth.uid())
+    and (exists (select 1 from messages x where x.group_id = mine.group_id and x.epoch = mine.epoch and x.id >= gm.history_from)
+         or exists (select 1 from reactions r where r.group_id = mine.group_id and r.epoch = mine.epoch and r.message_id >= gm.history_from))
     and not exists (
       select 1 from conversation_keys theirs
       where theirs.group_id = mine.group_id and theirs.epoch = mine.epoch
@@ -98,6 +144,7 @@ revoke execute on function public.push_recipients(uuid, uuid) from public, anon,
 grant execute on function public.push_recipients(uuid, uuid) to service_role;
 
 create index if not exists messages_group_id_desc on public.messages (group_id, id desc);
+create index if not exists messages_group_epoch on public.messages (group_id, epoch);
 
 ------------------------------------------------------------------------------
 -- More things worth a push (notify_push() is from 0006)

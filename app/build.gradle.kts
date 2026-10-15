@@ -125,6 +125,10 @@ dependencies {
     implementation(libs.androidx.documentfile)
     implementation(libs.androidx.exifinterface)
     implementation(libs.coil.network.okhttp)
+    // Any emoji as a reaction.
+    implementation(libs.androidx.emoji.picker)
+    // Cutting the subject out of a photo for stickers (model comes via Google Play services).
+    implementation(libs.mlkit.subject.segmentation)
     implementation(libs.osmdroid)
 
     debugImplementation(libs.androidx.compose.ui.tooling)

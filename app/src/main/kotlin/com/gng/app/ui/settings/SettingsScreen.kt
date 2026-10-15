@@ -148,7 +148,8 @@ fun SettingsContent(
                     Avatar(me.displayName, me.avatarUrl, size = 64.dp, colorKey = me.id)
                     Column(Modifier.padding(horizontal = 16.dp).weight(1f)) {
                         Text(me.displayName, style = MaterialTheme.typography.titleLarge)
-                        val line = listOfNotNull(me.branch, me.year?.let { "Year $it" }).joinToString(" · ")
+                        me.handle?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = scheme.primary) }
+                        val line = listOfNotNull(me.college, me.branch, me.year?.let { "Year $it" }).joinToString(" · ")
                         if (line.isNotBlank()) {
                             Text(line, style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant)
                         }

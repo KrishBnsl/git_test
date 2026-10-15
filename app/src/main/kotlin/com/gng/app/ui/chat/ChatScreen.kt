@@ -35,6 +35,16 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.rememberNestedScrollInteropConnection
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.emoji2.emojipicker.EmojiPickerView
+import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledIconButton
@@ -113,6 +123,7 @@ import com.gng.app.ui.components.MessageEffect
 import com.gng.app.ui.gngViewModel
 import com.gng.app.ui.group.GroupContext
 import com.gng.app.ui.icons.GngIcons
+import com.gng.app.ui.stickers.StickerMakerDialog
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
@@ -128,6 +139,10 @@ data class ChatUiState(
     val reachedStart: Boolean = false,
     val uploads: Int = 0,
     val replyTo: ChatMessage? = null,
+    /** Someone you don't share a gang with wants to message you. */
+    val incomingRequest: Boolean = false,
+    /** You messaged someone outside your gangs and they haven't accepted yet. */
+    val outgoingRequest: Boolean = false,
 )
 
 /** What the chat can do. Defaults do nothing, for previews. */
@@ -150,10 +165,12 @@ data class ChatActions(
     val onNotice: (String) -> Unit = {},
     val receiptFor: (ChatMessage) -> Receipt = { Receipt("Sent") },
     val detailsFor: (ChatMessage) -> List<Pair<String, String>> = { emptyList() },
+    val onAcceptRequest: () -> Unit = {},
+    val onDeclineRequest: () -> Unit = {},
 )
 
 @Composable
-fun ChatScreen(ctx: GroupContext, onOpenEvent: (ChatMessage) -> Unit) {
+fun ChatScreen(ctx: GroupContext, onOpenEvent: (ChatMessage) -> Unit, onClosed: () -> Unit = {}) {
     val c = LocalContext.current.container
     val vm = gngViewModel(key = "chat-${ctx.group.id}") { ChatViewModel(it, ctx) }
     val context = LocalContext.current
@@ -199,7 +216,10 @@ fun ChatScreen(ctx: GroupContext, onOpenEvent: (ChatMessage) -> Unit) {
 
     ChatContent(
         ctx = ctx,
-        state = ChatUiState(vm.messages, vm.reactions, vm.loaded, vm.reachedStart, vm.uploads, vm.replyTo),
+        state = ChatUiState(
+            vm.messages, vm.reactions, vm.loaded, vm.reachedStart, vm.uploads, vm.replyTo,
+            incomingRequest = vm.incomingRequest, outgoingRequest = vm.outgoingRequest,
+        ),
         media = media,
         stickers = c.stickers,
         actions = ChatActions(
@@ -227,6 +247,8 @@ fun ChatScreen(ctx: GroupContext, onOpenEvent: (ChatMessage) -> Unit) {
             onNotice = { vm.error = it },
             receiptFor = vm::receiptFor,
             detailsFor = vm::detailsFor,
+            onAcceptRequest = vm::acceptRequest,
+            onDeclineRequest = { vm.declineRequest(onClosed) },
         ),
     )
 }
@@ -406,7 +428,10 @@ fun ChatContent(
             )
         }
         state.replyTo?.let { target -> ReplyBanner(target, ctx, onClose = { actions.onReply(null) }) }
-        if (ctx.canSendMessages) {
+        if (state.outgoingRequest) RequestNote("Message request sent. ${ctx.title.substringBefore(' ')} sees your messages and can accept.")
+        if (state.incomingRequest) {
+            RequestBar(ctx, actions.onAcceptRequest, actions.onDeclineRequest)
+        } else if (ctx.canSendMessages) {
             // "@ar" right before the cursor: suggest people to tag (gangs only).
             val query = if (ctx.isDm) null else mentionQuery(draft)
             val suggestions = remember(query, ctx.members) {
@@ -514,6 +539,37 @@ private fun ReplyBanner(target: ChatMessage, ctx: GroupContext, onClose: () -> U
                 Text(target.payload.preview(), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
             }
             IconButton(onClick = onClose) { GngIcon(GngIcons.Close, "Cancel reply") }
+        }
+    }
+}
+
+@Composable
+private fun RequestNote(text: String) {
+    Text(
+        text, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
+    )
+}
+
+/** Instead of the input on a message request: who it's from, and accept or decline. */
+@Composable
+private fun RequestBar(ctx: GroupContext, onAccept: () -> Unit, onDecline: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    val other = ctx.other
+    Surface(color = scheme.surfaceContainerHigh, shape = RoundedCornerShape(28.dp), modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+        Column(Modifier.padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("${ctx.title} wants to message you", style = MaterialTheme.typography.titleSmall)
+            val line = listOfNotNull(other?.handle, other?.college).joinToString(" · ")
+            if (line.isNotBlank()) Text(line, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
+            Text(
+                "You don't share a gang. They won't know you've seen this unless you accept.",
+                style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(onClick = onDecline, modifier = Modifier.weight(1f)) { Text("Decline") }
+                Button(onClick = onAccept, modifier = Modifier.weight(1f)) { Text("Accept") }
+            }
         }
     }
 }
@@ -637,7 +693,12 @@ private fun StickerPanel(store: StickerStore, onSend: (File) -> Unit) {
     var selected by rememberSaveable { mutableStateOf<String?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
     var deleting by remember { mutableStateOf<File?>(null) }
-    LaunchedEffect(Unit) { store.load() }
+    var linked by remember { mutableStateOf(store.hasWhatsAppSource) }
+    LaunchedEffect(Unit) {
+        store.load()
+        // WhatsApp's folder was picked before: pull in anything new, no taps needed.
+        store.syncWhatsApp()?.let { if (it.added > 0) message = it.describe() }
+    }
 
     val importFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
         tree ?: return@rememberLauncherForActivityResult
@@ -646,8 +707,12 @@ private fun StickerPanel(store: StickerStore, onSend: (File) -> Unit) {
             message = runCatching { store.importWhatsAppFolder(tree) }
                 .onSuccess { if (it.added > 0) selected = "whatsapp" }
                 .fold({ it.describe() }, { it.message ?: "Couldn't read that folder" })
+            linked = store.hasWhatsAppSource
         }
     }
+    // Make your own: pick a photo, then cut out / frame / caption it.
+    var making by remember { mutableStateOf<android.net.Uri?>(null) }
+    val pickForSticker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> making = uri }
     val importFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
         message = "Importing…"
@@ -662,8 +727,25 @@ private fun StickerPanel(store: StickerStore, onSend: (File) -> Unit) {
                 }
                 item {
                     FilterChip(
-                        selected = false, onClick = { importFolder.launch(StickerStore.WHATSAPP_STICKERS_URI) },
-                        label = { Text("From WhatsApp") }, leadingIcon = { GngIcon(GngIcons.Add, null, size = 18.dp) },
+                        selected = false,
+                        onClick = {
+                            if (linked) {
+                                message = "Checking WhatsApp for new stickers…"
+                                scope.launch { message = store.syncWhatsApp()?.describe() ?: "Couldn't read WhatsApp's folder" }
+                            } else {
+                                message = "Tap \"Use this folder\" on the next screen to bring in all your WhatsApp stickers"
+                                importFolder.launch(StickerStore.WHATSAPP_STICKERS_URI)
+                            }
+                        },
+                        label = { Text(if (linked) "Sync WhatsApp" else "From WhatsApp") },
+                        leadingIcon = { GngIcon(if (linked) GngIcons.Sync else GngIcons.Add, null, size = 18.dp) },
+                    )
+                }
+                item {
+                    FilterChip(
+                        selected = false,
+                        onClick = { pickForSticker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                        label = { Text("Make sticker") }, leadingIcon = { GngIcon(GngIcons.AutoAwesome, null, size = 18.dp) },
                     )
                 }
                 item {
@@ -680,8 +762,9 @@ private fun StickerPanel(store: StickerStore, onSend: (File) -> Unit) {
                     Text("No stickers yet", style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "Tap \"From WhatsApp\" and pick the WhatsApp Stickers folder it opens (or Android › media to " +
-                            "include WhatsApp Business), or import a .wastickers pack. You can also long-press any sticker in a chat to save it.",
+                        "Tap \"From WhatsApp\", then \"Use this folder\": all your WhatsApp (and WhatsApp Business) stickers come in, " +
+                            "and new ones keep coming automatically. Or make your own, import a .wastickers pack, or long-press " +
+                            "any sticker in a chat to save it.",
                         style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -695,6 +778,20 @@ private fun StickerPanel(store: StickerStore, onSend: (File) -> Unit) {
                         )
                     }
                 }
+            }
+        }
+    }
+    making?.let { uri ->
+        StickerMakerDialog(uri, onDismiss = { making = null }) { webp, send ->
+            making = null
+            scope.launch {
+                runCatching { store.saveMade(webp) }
+                    .onSuccess { file ->
+                        selected = "mine"
+                        message = "Saved to My stickers"
+                        if (send) onSend(file)
+                    }
+                    .onFailure { message = it.message ?: "Couldn't save that sticker" }
             }
         }
     }
@@ -727,19 +824,25 @@ private fun MessageActionsSheet(
 ) {
     val clipboard = LocalClipboardManager.current
     val scheme = MaterialTheme.colorScheme
+    var pickAny by remember { mutableStateOf(false) }
     GngSheet(title = m.payload.preview().take(60).ifBlank { "Message" }, onDismiss = onDismiss) {
         if (!m.isPending) {
-            // Tapbacks, one per person.
+            // Tapbacks, one per person: the usual ones, whatever you reacted with, and + for any emoji.
+            val quick = (listOfNotNull(myReaction?.takeIf { it !in QUICK_REACTIONS }) + QUICK_REACTIONS).take(QUICK_REACTIONS.size)
             Surface(shape = RoundedCornerShape(28.dp), color = scheme.surfaceContainerHigh, modifier = Modifier.fillMaxWidth()) {
-                Row(Modifier.padding(horizontal = 6.dp, vertical = 4.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    TAPBACKS.forEach { e ->
+                Row(Modifier.padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    quick.forEach { e ->
                         Box(
-                            Modifier.size(40.dp).clip(CircleShape)
+                            Modifier.weight(1f).aspectRatio(1f).clip(CircleShape)
                                 .background(if (e == myReaction) scheme.secondaryContainer else Color.Transparent)
                                 .clickable { onReact(e) },
                             contentAlignment = Alignment.Center,
                         ) { Text(e, fontSize = 22.sp) }
                     }
+                    Box(
+                        Modifier.weight(1f).aspectRatio(1f).clip(CircleShape).clickable { pickAny = true },
+                        contentAlignment = Alignment.Center,
+                    ) { GngIcon(GngIcons.AddReaction, "Any emoji", tint = scheme.onSurfaceVariant) }
                 }
             }
             Spacer(Modifier.height(8.dp))
@@ -756,6 +859,27 @@ private fun MessageActionsSheet(
         if (m.payload.t == "image") SheetAction(GngIcons.Download, "Save to gallery", onSaveMedia)
         if (m.payload.t == "sticker" && m.userId != ctx.me.id) SheetAction(GngIcons.Star, "Save sticker", onSaveSticker)
         if (m.userId == ctx.me.id && !m.isPending) SheetAction(GngIcons.Info, "Info", onInfo)
+    }
+    if (pickAny) EmojiPickerSheet(onDismiss = { pickAny = false }) { pickAny = false; onReact(it) }
+}
+
+/** The tapbacks one tap away; anything else is under +. */
+private val QUICK_REACTIONS = listOf("❤️", "😂", "👍", "😮", "😢", "🔥", "🙏")
+
+/** Every emoji, with categories, recents and skin tones (AndroidX's picker). */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EmojiPickerSheet(onDismiss: () -> Unit, onPick: (String) -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        AndroidView(
+            factory = { context ->
+                EmojiPickerView(context).apply {
+                    emojiGridColumns = 8
+                    setOnEmojiPickedListener { onPick(it.emoji) }
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(420.dp).nestedScroll(rememberNestedScrollInteropConnection()),
+        )
     }
 }
 

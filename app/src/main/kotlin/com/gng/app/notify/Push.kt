@@ -77,6 +77,8 @@ class Inbox(private val c: AppContainer) {
         val messageId = data["message_id"]?.toLongOrNull() ?: return
         val me = c.auth.awaitUserId() ?: return
         val m = fromPush(data, groupId, messageId, me) ?: c.chat.fetchOne(messageId, me) ?: return
+        // A message request from someone outside your gangs: no receipts until you accept.
+        val isRequest = data["request_from"]?.let { it != me } == true
         try {
             if (m.userId == me) return
             if (openConversation == groupId && c.foreground) return
@@ -93,6 +95,7 @@ class Inbox(private val c: AppContainer) {
             val myName = members[me]?.displayName ?: "You"
             val isDm = data["group_kind"]?.let { it == "dm" } ?: (conversation?.isDm == true)
             val title = when {
+                isRequest -> "Message request · ${senderName ?: "someone new"}"
                 isDm -> senderName ?: "Direct message"
                 else -> data["group_name"] ?: conversation?.name ?: "gng"
             }
@@ -115,7 +118,7 @@ class Inbox(private val c: AppContainer) {
             )
         } finally {
             // We've got it, so the sender can see "Delivered". After the notification, not before.
-            runCatching { c.chat.markSeen(groupId, messageId, null) }
+            if (!isRequest) runCatching { c.chat.markSeen(groupId, messageId, null) }
         }
     }
 

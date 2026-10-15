@@ -70,10 +70,16 @@ data class Conversation(
     @SerialName("unread_count") val unreadCount: Long = 0,
     /** Unread messages that @mention you. */
     @SerialName("unread_mentions") val unreadMentions: Long = 0,
+    @SerialName("dm_status") val dmStatus: String = "accepted",
+    @SerialName("requested_by") val requestedBy: String? = null,
 ) {
+    fun isRequestFor(myId: String) = isDm && dmStatus == "pending" && requestedBy != myId
     val isDm get() = kind == "dm"
     val isMuted get() = mutedUntil?.let { parseInstant(it).isAfter(Instant.now()) } ?: false
-    fun toGroup() = Group(id = id, name = name, icon = emoji, inviteCode = inviteCode, createdBy = createdBy, photoUrl = photoUrl, kind = kind)
+    fun toGroup() = Group(
+        id = id, name = name, icon = emoji, inviteCode = inviteCode, createdBy = createdBy, photoUrl = photoUrl, kind = kind,
+        dmStatus = dmStatus, requestedBy = requestedBy,
+    )
 }
 
 @Serializable

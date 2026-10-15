@@ -317,8 +317,21 @@ class ChatRepository(
     suspend fun call(id: String): CallRow? =
         client.from("calls").select { filter { eq("id", id) } }.decodeSingleOrNull()
 
+    /** Opens a DM with anyone on gng: straight away with gang-mates, as a message request otherwise. */
     suspend fun openDm(otherUserId: String): Group =
-        client.postgrest.rpc("open_direct_chat", buildJsonObject { put("p_other", otherUserId) }).decodeAs()
+        client.postgrest.rpc("request_direct_chat", buildJsonObject { put("p_other", otherUserId) }).decodeAs()
+
+    /** Accept (it becomes a normal DM) or decline (it's deleted) a message request someone sent me. */
+    suspend fun respondToRequest(groupId: String, accept: Boolean) {
+        client.postgrest.rpc("respond_dm_request", buildJsonObject {
+            put("gid", groupId)
+            put("p_accept", accept)
+        })
+    }
+
+    /** Anyone on gng, by @username or name. */
+    suspend fun searchPeople(query: String): List<PersonCard> =
+        client.postgrest.rpc("search_people", buildJsonObject { put("q", query) }).decodeList()
 
     /** Everyone I share a gang with (RLS only returns those), for starting a DM. */
     suspend fun people(myId: String): List<Profile> =

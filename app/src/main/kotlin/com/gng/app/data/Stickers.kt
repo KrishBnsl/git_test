@@ -18,8 +18,7 @@ data class StickerPack(val id: String, val name: String, val stickers: List<File
 /** What an import did, so the panel can say something useful. */
 data class ImportResult(val found: Int, val added: Int, val duplicates: Int, val unreadable: Int) {
     fun describe(): String = when {
-        found == 0 -> "No stickers found there. Pick Android › media › com.whatsapp › WhatsApp › Media › WhatsApp Stickers " +
-            "(or Android › media to include WhatsApp Business too)"
+        found == 0 -> "No stickers found there. Pick Android › media (or WhatsApp › Media › WhatsApp Stickers inside it)"
         added == 0 && duplicates > 0 -> "All $duplicates stickers are already in your library"
         else -> buildString {
             append("Added $added sticker${if (added == 1) "" else "s"}")
@@ -54,12 +53,44 @@ class StickerStore(private val context: Context, private val media: MediaReposit
      * subfolders, and recognises WebP files by their contents since some have no extension.
      */
     suspend fun importWhatsAppFolder(tree: Uri): ImportResult = withContext(Dispatchers.IO) {
+        // Keep access, so new WhatsApp stickers come in by themselves from now on (see syncWhatsApp).
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(tree, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            sourceFile.writeText(tree.toString())
+        }
+        importFrom(tree)
+    }
+
+    /** Whether WhatsApp's folder has been picked once, so syncing needs no more taps. */
+    val hasWhatsAppSource: Boolean get() = savedSource() != null
+
+    /**
+     * Brings in stickers that showed up in WhatsApp since last time. Quick when there's nothing new:
+     * only files it hasn't seen before are read. Null if WhatsApp's folder was never picked.
+     */
+    suspend fun syncWhatsApp(): ImportResult? = withContext(Dispatchers.IO) {
+        val tree = savedSource() ?: return@withContext null
+        runCatching { importFrom(tree) }.getOrNull()
+    }
+
+    private val sourceFile get() = File(root, ".source")
+    private val seenFile get() = File(root, ".seen")
+
+    private fun savedSource(): Uri? {
+        val uri = sourceFile.takeIf { it.exists() }?.readText()?.trim()?.let(Uri::parse) ?: return null
+        val granted = context.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }
+        return uri.takeIf { granted }
+    }
+
+    private suspend fun importFrom(tree: Uri): ImportResult {
+        val seen = seenFile.takeIf { it.exists() }?.readLines()?.toMutableSet() ?: mutableSetOf()
         val candidates = mutableListOf<Found>()
         walk(tree, DocumentsContract.getTreeDocumentId(tree), "", depth = 0, candidates)
         // Picked a parent folder: only take what's inside a stickers folder, not every image WhatsApp has.
         val inStickerFolders = candidates.filter { it.path.contains("sticker", ignoreCase = true) }
         // Newest first, so if there are more than we keep, it's the old ones that are left out.
-        val files = inStickerFolders.ifEmpty { candidates }.sortedByDescending { it.modified }.take(MAX_IMPORT)
+        val all = inStickerFolders.ifEmpty { candidates }
+        val files = all.filter { it.key !in seen }.sortedByDescending { it.modified }.take(MAX_IMPORT)
         val known = existingNames()
         var added = 0
         var duplicates = 0
@@ -71,12 +102,18 @@ class StickerStore(private val context: Context, private val media: MediaReposit
                 SaveResult.Duplicate -> duplicates++
                 else -> unreadable++
             }
+            if (bytes != null) seen += f.key
         }
+        runCatching { seenFile.writeText(seen.joinToString("\n")) }
         load()
-        ImportResult(files.size, added, duplicates, unreadable)
+        // Found counts everything there, so a sync with nothing new reads "already in your library".
+        return ImportResult(all.size, added, duplicates + (all.size - files.size).coerceAtMost(all.size), unreadable)
     }
 
-    private class Found(val path: String, val uri: Uri, val modified: Long)
+    private class Found(val path: String, val uri: Uri, val modified: Long) {
+        /** Same file, same date: already imported. */
+        val key get() = "$uri@$modified"
+    }
 
     /** Lists sticker-looking files under [docId], a few levels deep, skipping folders that can't hold stickers. */
     private fun walk(tree: Uri, docId: String, path: String, depth: Int, out: MutableList<Found>) {
@@ -169,6 +206,13 @@ class StickerStore(private val context: Context, private val media: MediaReposit
         (save("saved", "Saved", file.readBytes(), existingNames()) == SaveResult.Added).also { load() }
     }
 
+    /** Saves a sticker you made (already a 512px WebP) to "My stickers" and returns its file. */
+    suspend fun saveMade(webp: ByteArray): File = withContext(Dispatchers.IO) {
+        save(MADE_PACK, "My stickers", webp, existingNames())
+        load()
+        File(File(root, MADE_PACK), webp.sha256().hex().take(24) + ".webp")
+    }
+
     suspend fun delete(file: File) = withContext(Dispatchers.IO) {
         file.delete()
         file.parentFile?.takeIf { it.listFiles { f -> f.extension == "webp" }.isNullOrEmpty() }?.deleteRecursively()
@@ -225,9 +269,11 @@ class StickerStore(private val context: Context, private val media: MediaReposit
                 )
             }
             .filter { it.stickers.isNotEmpty() }
-            .sortedBy { if (it.id == "saved") "" else it.name.lowercase() }
+            // Your own first, then ones you saved from chats, then the rest by name.
+            .sortedBy { when (it.id) { MADE_PACK -> "0"; "saved" -> "1"; else -> "2" + it.name.lowercase() } }
 
     companion object {
+        private const val MADE_PACK = "mine"
         private const val MAX_IMPORT = 3000
         private const val MAX_SCAN = 6000
 
@@ -242,10 +288,13 @@ class StickerStore(private val context: Context, private val media: MediaReposit
         fun isWebp(head: ByteArray): Boolean =
             head.size >= 12 && String(head, 0, 4, Charsets.US_ASCII) == "RIFF" && String(head, 8, 4, Charsets.US_ASCII) == "WEBP"
 
-        /** Where WhatsApp keeps received stickers; used as the folder picker's starting point. */
+        /**
+         * Where the folder picker opens: Android/media, which holds WhatsApp's and WhatsApp Business's
+         * sticker folders. One "Use this folder" there covers both.
+         */
         val WHATSAPP_STICKERS_URI: Uri = DocumentsContract.buildDocumentUri(
             "com.android.externalstorage.documents",
-            "primary:Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Stickers",
+            "primary:Android/media",
         )
     }
 }

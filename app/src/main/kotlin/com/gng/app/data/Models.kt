@@ -19,9 +19,25 @@ data class Profile(
     val year: Int? = null,
     val birthday: String? = null,
     @SerialName("status_text") val statusText: String? = null,
+    /** "@username", without the @. Everyone has one (made from their name until they pick their own). */
+    val username: String? = null,
+    val college: String? = null,
 ) {
     val birthdayDate: LocalDate? get() = birthday?.let(LocalDate::parse)
+    val handle: String? get() = username?.let { "@$it" }
 }
+
+/** Someone found by searching gng: just their public card. */
+@Serializable
+data class PersonCard(
+    val id: String,
+    @SerialName("display_name") val displayName: String,
+    val username: String? = null,
+    @SerialName("avatar_url") val avatarUrl: String? = null,
+    val college: String? = null,
+    /** Already in a gang together, so a DM opens straight away instead of as a request. */
+    @SerialName("shares_gang") val sharesGang: Boolean = false,
+)
 
 @Serializable
 data class CountRow(val count: Int)
@@ -43,9 +59,15 @@ data class Group(
     @SerialName("group_members") val memberRows: List<CountRow> = emptyList(),
     /** "gang", or "dm" for a two-person direct message. */
     val kind: String = "gang",
+    /** DMs between people without a gang in common start as "pending" message requests. */
+    @SerialName("dm_status") val dmStatus: String = "accepted",
+    @SerialName("requested_by") val requestedBy: String? = null,
 ) {
     val memberCount: Int get() = memberRows.firstOrNull()?.count ?: 1
     val isDm get() = kind == "dm"
+    val isRequest get() = isDm && dmStatus == "pending"
+    /** A request someone sent me, waiting for me to accept or decline. */
+    fun isRequestFor(myId: String) = isRequest && requestedBy != myId
 }
 
 @Serializable

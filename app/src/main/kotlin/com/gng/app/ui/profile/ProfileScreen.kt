@@ -24,7 +24,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -70,6 +73,8 @@ import java.time.format.DateTimeFormatter
 /** What the form hands back when the person taps save. */
 data class ProfileDraft(
     val name: String,
+    val username: String = "",
+    val college: String = "",
     val branch: String,
     val year: Int?,
     val birthday: String?,
@@ -90,6 +95,26 @@ class ProfileViewModel(
 
     fun dismissError() { error = null }
 
+    /** null while unknown (empty, unchanged, or still checking). */
+    var usernameFree by mutableStateOf<Boolean?>(null)
+        private set
+    private var checking: kotlinx.coroutines.Job? = null
+
+    fun checkUsername(raw: String) {
+        checking?.cancel()
+        usernameFree = null
+        val u = raw.trim().removePrefix("@").lowercase()
+        if (u.isEmpty() || u == existing?.username) return
+        if (!USERNAME.matches(u)) {
+            usernameFree = false
+            return
+        }
+        checking = viewModelScope.launch {
+            kotlinx.coroutines.delay(400)
+            usernameFree = runCatching { repo.usernameAvailable(u) }.getOrNull()
+        }
+    }
+
     fun save(context: Context, draft: ProfileDraft, onSaved: (Profile) -> Unit) {
         if (busy) return
         busy = true
@@ -109,6 +134,8 @@ class ProfileViewModel(
                     year = draft.year,
                     birthday = draft.birthday,
                     statusText = draft.status.trim().ifBlank { null },
+                    username = draft.username.trim().removePrefix("@").lowercase().ifBlank { existing?.username },
+                    college = draft.college.trim().ifBlank { null },
                 )
                 repo.save(profile)
                 profile
@@ -124,6 +151,7 @@ fun ProfileScreen(userId: String, existing: Profile?, onSaved: (Profile) -> Unit
     val context = LocalContext.current
     ProfileForm(
         existing = existing, busy = vm.busy, error = vm.error, onDismissError = vm::dismissError, onBack = onBack,
+        usernameFree = vm.usernameFree, onUsernameChange = vm::checkUsername,
         onSave = { draft -> vm.save(context, draft, onSaved) },
     )
 }
@@ -139,9 +167,13 @@ fun ProfileForm(
     onDismissError: () -> Unit,
     onSave: (ProfileDraft) -> Unit,
     onBack: (() -> Unit)? = null,
+    usernameFree: Boolean? = null,
+    onUsernameChange: (String) -> Unit = {},
 ) {
     val scheme = MaterialTheme.colorScheme
     var name by rememberSaveable { mutableStateOf(existing?.displayName ?: "") }
+    var username by rememberSaveable { mutableStateOf(existing?.username ?: "") }
+    var college by rememberSaveable { mutableStateOf(existing?.college ?: "") }
     var branch by rememberSaveable { mutableStateOf(existing?.branch ?: "") }
     var year by rememberSaveable { mutableStateOf(existing?.year) }
     var birthday by rememberSaveable { mutableStateOf(existing?.birthday) }
@@ -242,6 +274,35 @@ fun ProfileForm(
             )
             Spacer(Modifier.height(12.dp))
             OutlinedTextField(
+                username,
+                {
+                    username = it.lowercase().filter { ch -> ch.isLetterOrDigit() || ch == '.' || ch == '_' }.take(20)
+                    onUsernameChange(username)
+                },
+                label = { Text("Username") },
+                prefix = { Text("@") },
+                placeholder = { Text("so people can find you") },
+                singleLine = true,
+                isError = usernameFree == false,
+                supportingText = {
+                    Text(
+                        when {
+                            usernameFree == false && !USERNAME.matches(username) -> "3 to 20 letters, numbers, . or _"
+                            usernameFree == false -> "Taken, try another"
+                            usernameFree == true -> "Available"
+                            username.isBlank() -> "We'll make one from your name if you leave this empty"
+                            else -> "Anyone on gng can find you by this"
+                        },
+                    )
+                },
+                leadingIcon = { GngIcon(GngIcons.AlternateEmail, null) },
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(4.dp))
+            CollegeField(college) { college = it.take(80) }
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(
                 branch, { branch = it.take(40) }, label = { Text("Branch") }, placeholder = { Text("CSE, ECE, ME…") },
                 singleLine = true,
                 leadingIcon = { GngIcon(GngIcons.School, null) },
@@ -277,9 +338,9 @@ fun ProfileForm(
             Spacer(Modifier.height(28.dp))
             Button(
                 onClick = {
-                    onSave(ProfileDraft(name, branch, year, birthday, status, photo, removePhoto))
+                    onSave(ProfileDraft(name, username, college, branch, year, birthday, status, photo, removePhoto))
                 },
-                enabled = name.isNotBlank() && !busy,
+                enabled = name.isNotBlank() && !busy && usernameFree != false,
                 modifier = Modifier.fillMaxWidth().height(56.dp),
             ) {
                 if (busy) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.5.dp, color = scheme.onPrimary)
@@ -293,5 +354,54 @@ fun ProfileForm(
             initial = birthday?.let(LocalDate::parse),
             onDismiss = { pickDate = false },
         ) { birthday = it.toString(); pickDate = false }
+    }
+}
+
+private val USERNAME = Regex("^[a-z0-9._]{3,20}$")
+
+/** Colleges people pick most; anything else can be typed. */
+private val COLLEGES = listOf(
+    "Delhi Technological University (DTU)",
+    "Netaji Subhas University of Technology (NSUT)",
+    "Indraprastha Institute of Information Technology (IIIT Delhi)",
+    "Indira Gandhi Delhi Technical University for Women (IGDTUW)",
+    "Indian Institute of Technology Delhi (IIT Delhi)",
+    "Guru Gobind Singh Indraprastha University (GGSIPU)",
+    "Maharaja Agrasen Institute of Technology (MAIT)",
+    "Bharati Vidyapeeth's College of Engineering (BVCOE)",
+    "University of Delhi (DU)",
+    "Jamia Millia Islamia (JMI)",
+    "Jawaharlal Nehru University (JNU)",
+    "Shiv Nadar University",
+    "Ashoka University",
+    "Amity University",
+    "Manipal Institute of Technology",
+    "Vellore Institute of Technology (VIT)",
+    "BITS Pilani",
+)
+
+/** A text field with college suggestions that narrow as you type. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CollegeField(value: String, onChange: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val matches = remember(value) {
+        COLLEGES.filter { value.isBlank() || it.contains(value, ignoreCase = true) }.filter { it != value }.take(6)
+    }
+    ExposedDropdownMenuBox(expanded = open && matches.isNotEmpty(), onExpandedChange = { open = it }) {
+        OutlinedTextField(
+            value, { onChange(it); open = true },
+            label = { Text("College") },
+            placeholder = { Text("Where you study") },
+            singleLine = true,
+            leadingIcon = { GngIcon(GngIcons.Apartment, null) },
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+            modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryEditable),
+        )
+        ExposedDropdownMenu(expanded = open && matches.isNotEmpty(), onDismissRequest = { open = false }) {
+            matches.forEach { college ->
+                DropdownMenuItem(text = { Text(college) }, onClick = { onChange(college); open = false })
+            }
+        }
     }
 }

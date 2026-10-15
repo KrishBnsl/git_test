@@ -52,6 +52,11 @@ class ChatViewModel(private val c: AppContainer, private val ctx: GroupContext) 
         private set
     var uploads by mutableIntStateOf(0)
         private set
+    /** A message request someone sent me: I can read it, and accept or decline. */
+    var incomingRequest by mutableStateOf(ctx.group.isRequestFor(myId))
+        private set
+    /** A request I sent that they haven't accepted yet. */
+    val outgoingRequest = ctx.group.isRequest && ctx.group.requestedBy == myId
     private var loadingOlder = false
     private var visible = false
 
@@ -137,6 +142,8 @@ class ChatViewModel(private val c: AppContainer, private val ctx: GroupContext) 
     }
 
     private fun markSeen() {
+        // Looking at a message request doesn't tell the sender anything until you accept it.
+        if (incomingRequest) return
         val latest = messages.lastOrNull { it.id > 0 }?.id ?: return
         viewModelScope.launch {
             val read = if (visible && c.settings.readReceipts.first()) latest else null
@@ -273,6 +280,26 @@ class ChatViewModel(private val c: AppContainer, private val ctx: GroupContext) 
                 reactions = reactions + (m.id to rollback)
             }
         }
+    }
+
+    // --- message requests -----------------------------------------------------------
+
+    fun acceptRequest() = viewModelScope.launch {
+        runCatching { c.chat.respondToRequest(groupId, accept = true) }
+            .onSuccess {
+                incomingRequest = false
+                markSeen()
+            }
+            .onFailure { error = it.friendly() }
+    }
+
+    fun declineRequest(onDone: () -> Unit) = viewModelScope.launch {
+        runCatching { c.chat.respondToRequest(groupId, accept = false) }
+            .onSuccess {
+                c.cache.clearGroup(groupId)
+                onDone()
+            }
+            .onFailure { error = it.friendly() }
     }
 
     // --- receipts ---------------------------------------------------------------------------

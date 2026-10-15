@@ -13,8 +13,9 @@ About 15 minutes, all free.
    Then run `supabase/migrations/0004_direct_messages.sql` (the first, plain-text direct messages).
    Then run `supabase/migrations/0005_chat.sql` (end-to-end encryption, encrypted DMs, read receipts, media, push, calls),
    and `0006_push_triggers.sql` (sends new messages and calls to the push function; see §3).
-   Then `0007_mentions.sql` (@mentions) and `0008_history_and_push.sql` (lets new members and new phones read a
-   chat's history; reaction notifications, unread counts in notifications).
+   Then `0007_mentions.sql` (@mentions), `0008_history_and_push.sql` (chat history for new members and new phones:
+   the last 100 messages of a gang, all of a DM; reaction notifications, unread counts in notifications), and
+   `0009_people_and_requests.sql` (@usernames, colleges, finding anyone on gng, Instagram-style message requests).
    All six can be run again safely if you're unsure whether you did; run them in order.
    ⚠️ After `0005` the server only accepts encrypted chat messages, so everyone needs the new app. Its first run also resets reactions.
 3. **Authentication → Providers → Email**: keep it enabled.
