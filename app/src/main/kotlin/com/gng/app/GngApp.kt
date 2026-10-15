@@ -1,5 +1,6 @@
 package com.gng.app
 
+import com.gng.app.update.AutoUpdate
 import android.app.Activity
 import android.app.Application
 import android.content.Context
@@ -34,6 +35,8 @@ class GngApp : Application() {
             override fun onActivityStopped(activity: Activity) {
                 started--
                 container.foreground = started > 0
+                // Just left the app: a downloaded update can install now without interrupting anything.
+                if (started == 0) AutoUpdate.onAppBackgrounded(this@GngApp)
             }
 
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit

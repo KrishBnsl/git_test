@@ -9,6 +9,7 @@
 // Secrets (supabase secrets set ...):
 //   FIREBASE_SERVICE_ACCOUNT  the Firebase service account JSON (Project settings -> Service accounts)
 //   WEBHOOK_SECRET            any long random string; the webhook sends it in the x-webhook-secret header
+//   RELEASE_SECRET            optional; the release workflow sends it in x-release-secret to tell every phone to update
 // SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided automatically.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
@@ -46,6 +47,13 @@ const serviceAccount = JSON.parse(Deno.env.get("FIREBASE_SERVICE_ACCOUNT") ?? "{
 const MAX_INLINE_CIPHERTEXT = 2800;
 
 Deno.serve(async (req) => {
+  // The release workflow: a new version is out, so every phone fetches and installs it in the background.
+  const releaseSecret = Deno.env.get("RELEASE_SECRET");
+  if (releaseSecret && req.headers.get("x-release-secret") === releaseSecret) {
+    const { version } = await req.json().catch(() => ({ version: "" }));
+    await notifyEveryone(googleAccessToken().catch(() => null), { type: "update", version: String(version ?? "") });
+    return new Response("ok");
+  }
   if (req.headers.get("x-webhook-secret") !== Deno.env.get("WEBHOOK_SECRET")) {
     return new Response("forbidden", { status: 403 });
   }
@@ -126,6 +134,13 @@ Deno.serve(async (req) => {
   }
   return new Response("ok");
 });
+
+/** Every phone with push on. Not urgent, so it doesn't wake anyone up; it just starts the download. */
+async function notifyEveryone(accessToken: Promise<string | null>, data: Record<string, string>) {
+  const { data: rows } = await supabase.from("device_tokens").select("user_id, token");
+  const everyone = (rows ?? []).map((r) => ({ ...r, muted_until: null, unread: 0, unread_total: 0, unread_chats: 0 })) as Recipient[];
+  await send(accessToken, everyone, data, { respectMute: false, normalPriority: true, collapseKey: "update", ttlSeconds: 7 * 86400 });
+}
 
 /** The conversation's name and kind, and the sender's display name. Not secret: the server stores them in plain. */
 async function names_(groupId: string, senderId: string | null): Promise<Record<string, string>> {

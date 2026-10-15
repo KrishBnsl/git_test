@@ -9,6 +9,7 @@ import com.gng.app.BuildConfig
 import com.gng.app.call.CallActivity
 import com.gng.app.container
 import com.gng.app.data.CallRow
+import com.gng.app.update.AutoUpdate
 import com.gng.app.data.ChatMessage
 import com.gng.app.data.MessageRow
 import com.gng.app.data.Payload
@@ -214,6 +215,8 @@ class PushService : FirebaseMessagingService() {
                         "message" -> c.inbox.onMessage(data)
                         "reaction" -> c.inbox.onReaction(data)
                         "share_keys" -> c.inbox.onShareKeys()
+                        // A new version was just released: fetch and install it in the background.
+                        "update" -> AutoUpdate.runNow(applicationContext)
                         "call" -> c.inbox.onCall(
                             CallRow(
                                 id = data["call_id"] ?: return@runCatching,

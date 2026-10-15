@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import com.gng.app.update.AutoUpdate
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -73,6 +74,7 @@ fun SettingsScreen(me: Profile, onEditProfile: () -> Unit, onTimetable: () -> Un
     val push by c.settings.push.collectAsStateWithLifecycle(true)
     val previews by c.settings.previews.collectAsStateWithLifecycle(true)
     val receipts by c.settings.readReceipts.collectAsStateWithLifecycle(true)
+    val autoUpdate by c.settings.autoUpdate.collectAsStateWithLifecycle(true)
     val context = LocalContext.current
     // Re-checked whenever you come back from the system settings page.
     var restrictions by remember { mutableStateOf(DeliveryRestrictions.of(context)) }
@@ -92,6 +94,11 @@ fun SettingsScreen(me: Profile, onEditProfile: () -> Unit, onTimetable: () -> Un
         ),
         updateState = updateState, updateActions = updates.actions(),
         currentVersion = updates.currentVersion, updatesEnabled = updates.enabled,
+        autoUpdate = autoUpdate,
+        onAutoUpdate = {
+            scope.launch { c.settings.setAutoUpdate(it) }
+            AutoUpdate.schedule(context, it)
+        },
         me = me, theme = theme, dynamicColor = dynamic,
         onTheme = { scope.launch { c.settings.setTheme(it) } },
         onDynamicColor = { scope.launch { c.settings.setDynamicColor(it) } },
@@ -125,6 +132,8 @@ fun SettingsContent(
     updateActions: UpdateActions = UpdateActions(),
     currentVersion: String = BuildConfig.VERSION_NAME,
     updatesEnabled: Boolean = true,
+    autoUpdate: Boolean = true,
+    onAutoUpdate: (Boolean) -> Unit = {},
     privacy: PrivacySettings = PrivacySettings(),
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -285,6 +294,15 @@ fun SettingsContent(
                     if (updatesEnabled) TextButton(onClick = updateActions.onCheck, enabled = !busy) { Text("Check") }
                 },
             )
+            if (updatesEnabled) {
+                ListItem(
+                    colors = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
+                    leadingContent = { GngIcon(GngIcons.SystemUpdate, null) },
+                    headlineContent = { Text("Update automatically") },
+                    supportingContent = { Text("New versions install in the background when you're not using gng") },
+                    trailingContent = { Switch(checked = autoUpdate, onCheckedChange = onAutoUpdate) },
+                )
+            }
             Spacer(Modifier.height(24.dp))
         }
     }

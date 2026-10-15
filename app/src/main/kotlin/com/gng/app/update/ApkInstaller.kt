@@ -1,30 +1,44 @@
 package com.gng.app.update
 
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInstaller
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
-import androidx.core.content.FileProvider
+import com.gng.core.AppVersions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
-/** Downloads an APK, checks it really is a newer build of this app, and hands it to Android's installer. */
+/** Downloads an APK, checks it really is a newer build of this app, and installs it. */
 class ApkInstaller(private val context: Context) {
     private val dir: File get() = File(context.cacheDir, "updates")
 
-    fun clearOldDownloads() {
-        dir.deleteRecursively()
+    /** Deletes downloads that aren't newer than [current] (they've been installed, or were superseded). */
+    fun clearOldDownloads(current: String) {
+        dir.listFiles().orEmpty().forEach { f ->
+            val version = f.name.removePrefix("gng-").removeSuffix(".part").removeSuffix(".apk")
+            if (f.name.endsWith(".part") || !AppVersions.isNewer(version, current)) f.delete()
+        }
     }
+
+    /** A finished download newer than [current], waiting to be installed. */
+    fun pendingDownload(current: String): File? =
+        dir.listFiles { f -> f.name.endsWith(".apk") }.orEmpty()
+            .filter { AppVersions.isNewer(it.name.removePrefix("gng-").removeSuffix(".apk"), current) }
+            .maxByOrNull { it.lastModified() }
 
     suspend fun download(info: UpdateInfo, onProgress: (Float) -> Unit): File = withContext(Dispatchers.IO) {
         dir.mkdirs()
         val target = File(dir, "gng-${info.version}.apk")
+        // Downloaded earlier (e.g. while you were using the app): no need to fetch it again.
+        if (target.exists() && runCatching { verify(target) }.isSuccess) return@withContext target
         val partial = File(dir, "gng-${info.version}.apk.part")
         val connection = (URL(info.apkUrl).openConnection() as HttpURLConnection).apply {
             setRequestProperty("User-Agent", "gng-android")
@@ -83,13 +97,32 @@ class ApkInstaller(private val context: Context) {
 
     fun canInstall(): Boolean = context.packageManager.canRequestPackageInstalls()
 
-    fun install(file: File) {
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-        context.startActivity(
-            Intent(Intent.ACTION_VIEW)
-                .setDataAndType(uri, "application/vnd.android.package-archive")
-                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK),
-        )
+    /**
+     * Installs through Android's package installer. On Android 12+ this needs no tap once gng installed
+     * the current version itself (and on 14+ gng claims to be the one that updates it). Otherwise
+     * Android asks, and [UpdateInstallReceiver] shows that prompt or a notification.
+     */
+    fun installInBackground(file: File) {
+        val installer = context.packageManager.packageInstaller
+        val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
+            setAppPackageName(context.packageName)
+            setSize(file.length())
+            if (Build.VERSION.SDK_INT >= 31) setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
+            if (Build.VERSION.SDK_INT >= 33) setPackageSource(PackageInstaller.PACKAGE_SOURCE_DOWNLOADED_FILE)
+            if (Build.VERSION.SDK_INT >= 34) setRequestUpdateOwnership(true)
+        }
+        val id = installer.createSession(params)
+        installer.openSession(id).use { session ->
+            session.openWrite("gng.apk", 0, file.length()).use { out ->
+                file.inputStream().use { it.copyTo(out) }
+                session.fsync(out)
+            }
+            val callback = PendingIntent.getBroadcast(
+                context, id, Intent(context, UpdateInstallReceiver::class.java),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
+            )
+            session.commit(callback.intentSender)
+        }
     }
 
     /** Android's "Install unknown apps" switch for gng. */

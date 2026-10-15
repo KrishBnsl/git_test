@@ -34,6 +34,7 @@ class SettingsStore(private val context: Context) {
     private val pushKey = booleanPreferencesKey("push")
     private val previewsKey = booleanPreferencesKey("previews")
     private val receiptsKey = booleanPreferencesKey("read_receipts")
+    private val autoUpdateKey = booleanPreferencesKey("auto_update")
 
     /** Push notifications on this phone. Off = the token is removed from the server, so nothing is sent. */
     val push: Flow<Boolean> = context.dataStore.data.map { it[pushKey] ?: true }
@@ -47,6 +48,10 @@ class SettingsStore(private val context: Context) {
     suspend fun setPush(on: Boolean) = context.dataStore.edit { it[pushKey] = on }
     suspend fun setPreviews(on: Boolean) = context.dataStore.edit { it[previewsKey] = on }
     suspend fun setReadReceipts(on: Boolean) = context.dataStore.edit { it[receiptsKey] = on }
+
+    /** Install new versions in the background as soon as they're released. */
+    val autoUpdate: Flow<Boolean> = context.dataStore.data.map { it[autoUpdateKey] ?: true }
+    suspend fun setAutoUpdate(on: Boolean) = context.dataStore.edit { it[autoUpdateKey] = on }
 
     val theme: Flow<ThemeMode> = context.dataStore.data.map { prefs ->
         prefs[themeKey]?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() } ?: ThemeMode.System

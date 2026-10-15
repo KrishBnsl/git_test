@@ -155,12 +155,29 @@ The **Release** workflow builds a signed `gng-0.2.0.apk` and attaches it to a ne
 
 ### Updates
 
-gng updates itself from GitHub Releases:
+gng updates itself from GitHub Releases, in the background (**Settings, About, Update automatically**, on by default):
 
-1. On app start (at most every 6 hours) and when you tap **Settings, About, Check**, the app asks GitHub for the latest release of this repo.
-2. If its version is newer, an **Update available** card appears on the home screen with the release notes.
-3. **Update** downloads the APK, checks it is a newer build of gng signed with the same key, and opens Android's installer. You confirm Android's own prompt: apps can't install silently outside the Play Store.
-4. The first time, Android asks you to allow gng to "install unknown apps". The card walks you to that switch, and carries on when you come back.
+1. When a release is published, the release workflow tells every phone through a silent push (needs the
+   `RELEASE_SECRET` secret, below). Phones also check by themselves every few hours and on app start.
+2. The phone downloads the APK and checks it's a newer build of gng signed with the same key.
+3. As soon as gng isn't on screen and there's no call going, it installs through Android's package installer.
+   - **Android 12 and newer:** no prompt, once gng installed the version that's there now (on Android 14+
+     gng also claims to be the app that updates itself). So the very first update may still ask once, through
+     a "gng update ready" notification; after that, updates are silent.
+   - **Android 11 and older:** Android always asks; the notification is one tap.
+4. The first time, Android may also ask you to allow gng to "install unknown apps".
+
+With automatic updates off, an **Update available** card appears instead, and **Update** does the same steps
+while you watch.
+
+**Instant updates on release:** pick any long random string and store it in two places:
+
+```sh
+supabase secrets set RELEASE_SECRET=<string>
+gh secret set RELEASE_SECRET   # paste the same string
+```
+
+Without it everything still works; phones just find the update on their next check.
 
 **Publishing an update** is just cutting a release (tag `v0.3.1` or use **Releases, Draft a new release**). Release notes become the "What's new" list.
 
